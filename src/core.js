@@ -671,7 +671,10 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   };
   const ensureSidebarButton = () => {
     const existing = document.querySelector('[data-drb-sidebar-btn]');
-    if (existing?.isConnected) return;
+    if (existing?.isConnected) {
+      if (existing.disabled) existing.disabled = false; // 이후 리렌더로 비활성이 되더라도 되돌린다
+      return;
+    }
     const last = findBtn(ANCHOR_LAST);
     const first = findBtn(ANCHOR_FIRST);
     if (!last || !first) return;
@@ -684,6 +687,10 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     btn.setAttribute('aria-label', 'Dooray Skin 설정');
     btn.setAttribute('title', '대화방 배경 · 테마 색 설정 (Alt+Shift+B)');
     btn.setAttribute('data-drb-sidebar-btn', '1');
+    // 원본(링크 모아보기)이 방에 따라 비활성인 채 복제되면 우리 버튼도 눌리지 않으므로 항상 활성화
+    btn.disabled = false;
+    btn.removeAttribute('aria-disabled');
+    btn.removeAttribute('tabindex');
     const svg = btn.querySelector('svg');
     if (svg) svg.outerHTML = ICON;
     btn.addEventListener('click', (e) => {
