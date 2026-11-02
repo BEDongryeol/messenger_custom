@@ -1,7 +1,7 @@
 #!/bin/bash
 # 배포 패키지 빌드
 #   dist/DooraySkin-mac.zip          : Dooray Skin.app + 제거.command + 설치방법.txt  (앱 더블클릭 한 번)
-#   dist/DooraySkin-Setup.cmd        : Windows 단일 파일 설치기 (더블클릭 한 번)
+#   dist/DooraySkin-Setup.cmd        : Windows cmd 설치기 (exe 는 Windows 에서 build-windows.ps1 로 빌드)
 #   dist/DooraySkin-windows.zip      : 위 cmd + 설치방법.txt (메신저/메일이 .cmd 첨부를 막을 때용)
 #   dist/DooraySkin-chrome-extension.zip
 set -euo pipefail
@@ -40,7 +40,7 @@ xattr -cr "$M" 2>/dev/null || true
 # ---------- windows: 단일 cmd ----------
 P=installer/windows/payload
 TMPD=$(mktemp -d)
-for f in common.ps1 launch.ps1 uninstall.ps1; do bom_crlf "$P/$f" > "$TMPD/$f"; done
+for f in common.ps1 launch.ps1 uninstall.ps1 setup.ps1; do bom_crlf "$P/$f" > "$TMPD/$f"; done
 crlf "$P/launch.vbs" > "$TMPD/launch.vbs"
 cp src/core.js "$TMPD/"
 S=dist/DooraySkin-Setup.cmd
@@ -49,11 +49,11 @@ S=dist/DooraySkin-Setup.cmd
   printf '#DRB_PS_BEGIN\r\n'
   printf '# Dooray Skin v%s\r\n' "$VER"
   printf '$EmbeddedFiles = @{\r\n'
-  for f in core.js common.ps1 launch.ps1 launch.vbs uninstall.ps1; do
+  for f in core.js common.ps1 launch.ps1 launch.vbs uninstall.ps1 setup.ps1; do
     printf "  '%s' = '%s'\r\n" "$f" "$(base64 -i "$TMPD/$f" | tr -d '\n')"
   done
   printf '}\r\n'
-  crlf installer/windows/setup-body.ps1
+  crlf installer/windows/payload/setup.ps1
 } > "$S"
 W=dist/windows; mkdir -p "$W"
 cp "$S" "$W/"

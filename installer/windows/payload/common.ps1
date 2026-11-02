@@ -152,7 +152,7 @@ function Get-DrbTargets([int]$port) {
   try { return Invoke-RestMethod -Uri "http://127.0.0.1:$port/json/list" -TimeoutSec 3 } catch { return $null }
 }
 
-# ---------------- 창 투명도 (Win32) ----------------
+# ---------------- 창 투명도 / 제목 표시줄 다크 / 메뉴 바 (Win32) ----------------
 function Initialize-DrbWin32 {
   if ('DRB.Win' -as [type]) { return }
   Add-Type -Namespace DRB -Name Win -MemberDefinition @'
@@ -163,6 +163,18 @@ public delegate bool EnumProc(System.IntPtr h, System.IntPtr l);
 [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern System.IntPtr GetWindowLongPtr(System.IntPtr h, int i);
 [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern System.IntPtr SetWindowLongPtr(System.IntPtr h, int i, System.IntPtr v);
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(System.IntPtr h, uint key, byte alpha, uint flags);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetMenu(System.IntPtr h);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetMenu(System.IntPtr h, System.IntPtr m);
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr h, int attr, ref int val, int size);
+public static System.Collections.Generic.List<System.IntPtr> ListWindows(uint pid) {
+  var list = new System.Collections.Generic.List<System.IntPtr>();
+  EnumWindows(delegate (System.IntPtr h, System.IntPtr l) {
+    uint p; GetWindowThreadProcessId(h, out p);
+    if (p == pid && IsWindowVisible(h)) list.Add(h);
+    return true;
+  }, System.IntPtr.Zero);
+  return list;
+}
 public static int SetAlphaForPid(uint pid, byte alpha) {
   int n = 0;
   EnumWindows(delegate (System.IntPtr h, System.IntPtr l) {
@@ -185,5 +197,39 @@ function Set-DrbOpacity([int]$percent) {
   $alpha = [byte][Math]::Round([Math]::Max(30, [Math]::Min(100, $percent)) * 2.55)
   $n = 0
   foreach ($pr in (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue)) { $n += [DRB.Win]::SetAlphaForPid([uint32]$pr.Id, $alpha) }
+  return $n
+}
+
+# 창 제목 표시줄 다크(DWMWA_USE_IMMERSIVE_DARK_MODE=20, 캡션 색 DWMWA_CAPTION_COLOR=35 는 Windows 11) + 메뉴 바 숨기기/복원.
+# 외부 프로세스에서도 DwmSetWindowAttribute / SetMenu 가 동작한다. 적용 상태를 창 핸들별로 기억해 바뀔 때만 호출.
+$script:DrbChrome = @{}   # hwnd → "dark|level"
+$script:DrbMenus = @{}    # hwnd → 숨기기 전 메뉴 핸들
+function Set-DrbWindowChrome([bool]$dark, [int]$level, [bool]$hideMenu) {
+  Initialize-DrbWin32
+  $n = 0
+  foreach ($pr in (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue)) {
+    foreach ($h in [DRB.Win]::ListWindows([uint32]$pr.Id)) {
+      $k = [string]$h
+      $key = "$dark|$level"
+      if ($script:DrbChrome[$k] -ne $key) {
+        $v = [int]$dark
+        [DRB.Win]::DwmSetWindowAttribute($h, 20, [ref]$v, 4) | Out-Null
+        if ($dark) { $g = [int][Math]::Round(255 * $level / 100); $c = ($g -shl 16) -bor ($g -shl 8) -bor $g } else { $c = -1 }  # -1 = 기본색
+        [DRB.Win]::DwmSetWindowAttribute($h, 35, [ref]$c, 4) | Out-Null
+        $script:DrbChrome[$k] = $key
+        $n++
+      }
+      $m = [DRB.Win]::GetMenu($h)
+      if ($hideMenu -and $m -ne [IntPtr]::Zero) {
+        $script:DrbMenus[$k] = $m
+        [DRB.Win]::SetMenu($h, [IntPtr]::Zero) | Out-Null
+        $n++
+      } elseif (-not $hideMenu -and $m -eq [IntPtr]::Zero -and $script:DrbMenus.ContainsKey($k)) {
+        [DRB.Win]::SetMenu($h, $script:DrbMenus[$k]) | Out-Null
+        $script:DrbMenus.Remove($k)
+        $n++
+      }
+    }
+  }
   return $n
 }

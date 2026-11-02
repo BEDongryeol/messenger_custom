@@ -1,18 +1,23 @@
 Dooray Skin (Windows) 사용법
 
-1. DooraySkin-Setup.cmd 를 더블클릭하세요. 끝입니다.
+1. DooraySkin-Setup.exe 를 더블클릭하세요. 끝입니다. (관리자 권한 불필요)
+   - 진행 창이 뜨고 몇 초 뒤 "설치가 끝났습니다" 가 나오면 자동으로 닫힙니다.
    - 작업 표시줄/시작 메뉴/바탕화면/시작프로그램에 있던 Dooray 아이콘이 자동으로 Dooray Skin 으로 바뀝니다
      (원래 아이콘 그대로 클릭하면 됩니다)
-   - Dooray 가 배경 기능이 적용된 상태로 다시 실행됩니다.
+   - Dooray 가 Dooray Skin 적용 상태로 다시 실행됩니다.
+   - 예전 버전이 이미 설치된 PC 에서도 그냥 실행하면 됩니다 (그 자리에서 업데이트, 설정 유지).
+   - exe 실행이 막힌 PC 에서는 DooraySkin-Setup.cmd 를 대신 더블클릭 (같은 내용)
 
 2. "Windows의 PC 보호" 파란 경고가 뜨면: 추가 정보 > 실행
    "보안 경고 - 파일 열기" 창이 뜨면: 실행
 
-3. 사용: Dooray 오른쪽 사이드바 링크 버튼 아래 [배경] 버튼 (또는 Alt+Shift+B)
-   - 맨 위: 두레이 창 투명도
+3. 사용: Dooray 오른쪽 사이드바 링크 버튼 아래 [Dooray Skin] 버튼 (또는 Alt+Shift+B)
+   - 맨 위: 두레이 창 투명도, 상단 메뉴 바 숨기기
    - 이 방: 현재 대화방 배경
    - 전체: 모든 방 기본 배경, 설정 내보내기/가져오기
+   - 테마: 다크 모드(창 제목 표시줄 포함), 테마 색(색 선택 / 스포이드 / 프리셋)
 
-제거: 시작 메뉴 > "Dooray Skin 제거" (바로가기를 원래 Dooray 로 되돌립니다)
-업데이트: 새 DooraySkin-Setup.cmd 를 다시 실행
+제거: 시작 메뉴 > "Dooray Skin 제거" 또는 Windows 설정 > 앱 > Dooray Skin > 제거
+      (바로가기를 원래 Dooray 로 되돌립니다)
+업데이트: 새 DooraySkin-Setup.exe 를 다시 실행
 문제 시: %APPDATA%\DooraySkin\launcher.log 를 전달해 주세요.

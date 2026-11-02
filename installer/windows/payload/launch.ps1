@@ -50,7 +50,8 @@ if (-not ($running -and $portUp)) {
 
 $core = [IO.File]::ReadAllText((Join-Path $data 'core.js'), [Text.Encoding]::UTF8)
 $injectExpr = "window.__DRB_HOST='desktop';`n" + $core + "`n;'injected'"
-$checkExpr = "JSON.stringify({core: !!window.__drbCore, op: (window.__drbSkin && window.__drbSkin.config && window.__drbSkin.config.global && window.__drbSkin.config.global.windowOpacity) || 100, btn: !!document.querySelector('[data-drb-sidebar-btn]')})"
+# 페이지의 설정(window.__drbSkin.config.global)에서 창 투명도, 다크 모드(제목 표시줄), 메뉴 바 숨기기를 읽는다
+$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, op: (g&&g.windowOpacity)||100, dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]')}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
 
 $seen = @{}
 $lastOp = 100
@@ -64,6 +65,7 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 2; continue
   }
   $op = $null
+  $chrome = $null
   foreach ($t in @($targets)) {
     if ($t.type -ne 'page' -or $t.url -notmatch '^https://([a-z0-9-]+\.)*dooray\.com/' -or -not $t.webSocketDebuggerUrl) { continue }
     $r = Invoke-DrbEvaluate $t.webSocketDebuggerUrl @($checkExpr)
@@ -74,6 +76,7 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
       Write-DrbLog ("inject " + $t.id + " " + $t.url + " -> " + ($res -join ','))
     } else {
       $op = [int]$state.op
+      $chrome = @{ dark = [bool]$state.dark; level = [int]$state.level; menu = [bool]$state.hideMenu }
       if (-not $seen.ContainsKey($t.id)) { $seen[$t.id] = 1; Write-DrbLog ("active " + $t.url + " btn=" + $state.btn) }
     }
   }
@@ -81,6 +84,10 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
     $n = Set-DrbOpacity $op
     if ($op -ne $lastOp) { Write-DrbLog "opacity $op% -> $n window(s)" }
     $lastOp = $op
+  }
+  if ($chrome) {
+    $n = Set-DrbWindowChrome $chrome.dark $chrome.level $chrome.menu
+    if ($n) { Write-DrbLog "chrome dark=$($chrome.dark) level=$($chrome.level)% hideMenu=$($chrome.menu) -> $n change(s)" }
   }
   Start-Sleep -Milliseconds 1500
 }

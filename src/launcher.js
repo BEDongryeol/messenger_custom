@@ -122,7 +122,7 @@ function mainHook(CORE_SRC, HOOK_LOG) {
   if (global.__drbHooked) return JSON.stringify({ ok: true, already: true, pid: process.pid });
   global.__drbHooked = true;
   const req = typeof require === 'function' ? require : process.mainModule.require;
-  const { app, webContents, BrowserWindow } = req('electron');
+  const { app, webContents, BrowserWindow, nativeTheme } = req('electron');
   const fs = req('fs');
   const hlog = (...a) => {
     try {
@@ -162,6 +162,14 @@ function mainHook(CORE_SRC, HOOK_LOG) {
       if (typeof m.windowOpacity === 'number') {
         opacity = Math.max(0.3, Math.min(1, m.windowOpacity));
         BrowserWindow.getAllWindows().forEach(applyOpacity);
+      }
+      // 다크 모드: 창 제목 표시줄·테두리(macOS 창 크롬, 시스템 메뉴)를 어둡게. 끄면 OS 설정을 따른다
+      if (typeof m.dark === 'boolean' && nativeTheme) {
+        try {
+          nativeTheme.themeSource = m.dark ? 'dark' : 'system';
+        } catch (err) {
+          hlog('nativeTheme error', String(err && err.message));
+        }
       }
     } catch {}
   };
