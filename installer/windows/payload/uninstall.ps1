@@ -1,0 +1,29 @@
+# Dooray Skin 제거 (Windows): 바로가기·자동실행을 원래 Dooray 로 되돌리고 파일 삭제
+$data = Join-Path $env:APPDATA 'DooraySkin'
+$shell = New-Object -ComObject WScript.Shell
+$restored = 0
+$bp = Join-Path $data 'shortcut-backup.json'
+if (Test-Path $bp) {
+  $b = Get-Content $bp -Raw -Encoding UTF8 | ConvertFrom-Json
+  foreach ($p in $b.psobject.Properties) {
+    if (-not (Test-Path -LiteralPath $p.Name)) { continue }
+    try {
+      $lnk = $shell.CreateShortcut($p.Name)
+      $lnk.TargetPath = $p.Value.Target; $lnk.Arguments = $p.Value.Args
+      if ($p.Value.Icon) { $lnk.IconLocation = $p.Value.Icon }
+      $lnk.WorkingDirectory = $p.Value.Dir
+      $lnk.Save(); $restored++
+    } catch {}
+  }
+}
+$rb = Join-Path $data 'run-backup.json'
+if (Test-Path $rb) {
+  $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  (Get-Content $rb -Raw -Encoding UTF8 | ConvertFrom-Json).psobject.Properties | ForEach-Object { Set-ItemProperty -Path $runKey -Name $_.Name -Value $_.Value }
+}
+$programs = [Environment]::GetFolderPath('Programs')
+$desktop = [Environment]::GetFolderPath('Desktop')
+Remove-Item (Join-Path $desktop 'Dooray Skin.lnk'), (Join-Path $programs 'Dooray Skin.lnk'), (Join-Path $programs 'Dooray Skin 제거.lnk') -ErrorAction SilentlyContinue
+Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+Add-Type -AssemblyName PresentationFramework
+[System.Windows.MessageBox]::Show("Dooray Skin 을 제거했습니다.`n바로가기 $restored 개를 원래 Dooray 로 되돌렸습니다.`nDooray 를 종료 후 다시 켜면 원래 상태가 됩니다.", 'Dooray Skin') | Out-Null

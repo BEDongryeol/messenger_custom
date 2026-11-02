@@ -1,0 +1,21 @@
+Dooray Skin (Mac) 사용법
+
+1. 압축을 풀고 "Dooray Skin" 앱을 더블클릭하세요. 끝입니다.
+   - 자동으로 ~/Applications 에 설치되고,
+   - Dock 에 고정된 Dooray Messenger 아이콘이 Dooray Skin 으로 바뀌고,
+   - Dooray 가 배경 기능이 적용된 상태로 다시 실행됩니다.
+
+2. 처음 한 번 "확인되지 않은 개발자" 경고가 뜨면
+   - macOS 14 이하: 앱을 우클릭 > 열기 > 열기
+   - macOS 15 이상: 시스템 설정 > 개인정보 보호 및 보안 > 맨 아래 "그래도 열기"
+   (사내 배포용이라 Apple 서명이 없어서 처음 한 번만 필요합니다)
+
+3. 사용: Dooray 오른쪽 사이드바 링크 버튼 아래 [배경] 버튼 (또는 Alt+Shift+B)
+   - 맨 위: 두레이 창 투명도
+   - 이 방: 현재 대화방 배경
+   - 전체: 모든 방 기본 배경, 설정 내보내기/가져오기
+
+4. 앞으로는 Dock 의 Dooray Skin(또는 Launchpad/Spotlight "Dooray Skin")으로 실행하세요.
+
+제거: "Dooray Skin 제거.command" 실행 (Dock 도 원래대로 되돌립니다)
+문제 시: ~/Library/Application Support/DooraySkin/launcher.log 를 전달해 주세요.

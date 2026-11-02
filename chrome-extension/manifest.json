@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Dooray Skin (대화방 배경)",
+  "version": "0.2.1",
+  "description": "Dooray 메신저 대화방별 배경 이미지. 우측 사이드바의 배경 버튼 또는 Alt+Shift+B.",
+  "content_scripts": [
+    {
+      "matches": ["https://*.dooray.com/*"],
+      "js": ["core.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ]
+}
