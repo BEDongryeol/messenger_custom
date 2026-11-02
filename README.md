@@ -36,7 +36,7 @@ build.sh                    dist/ 배포 파일 생성 (macOS 에서 실행)
 
 ## 빌드
 ```bash
-./build.sh
+bash build.sh
 ```
 결과물 (`dist/`)
 | 파일 | 사용자 동작 |
