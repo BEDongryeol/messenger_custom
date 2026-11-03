@@ -1,6 +1,8 @@
 # main 에 src/core.js 의 VERSION 이 올라간 커밋이 들어오면 자동 빌드 → GitHub Release(vX.Y.Z) 생성.
 # 사용자 PC 의 Dooray Skin 은 이 Release(최신)를 보고 업데이트 알림을 띄운다.
 # 같은 버전 Release 가 이미 있으면 아무것도 하지 않는다 (README 등 문서 커밋은 알림 없음).
+# Release 후 GitHub Pages 에 latest.json 을 올린다: 클라이언트는 API(비로그인 IP 당 시간 60회 한도) 대신 이 정적 파일을 확인.
+# 수동 실행(workflow_dispatch)하면 빌드 없이 현재 최신 Release 로 latest.json 만 다시 올린다.
 name: release
 
 on:
@@ -16,6 +18,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: release
@@ -97,3 +101,42 @@ jobs:
           NOTES
           gh release create "v$VER" out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Dooray Skin v$VER" --notes-file notes.md --generate-notes
+
+  pages:
+    needs: [check, release]
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p site
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > rel.json
+          python3 - <<'PY'
+          import json, os
+          r = json.load(open('rel.json'))
+          a = {x['name']: x['browser_download_url'] for x in r.get('assets', [])}
+          m = {
+              'version': r['tag_name'].lstrip('v'),
+              'tag': r['tag_name'],
+              'page': r['html_url'],
+              'published_at': r['published_at'],
+              'mac': a.get('DooraySkin-mac.zip'),
+              'winExe': a.get('DooraySkin-Setup.exe'),
+              'winCmd': a.get('DooraySkin-Setup.cmd'),
+              'chrome': a.get('DooraySkin-chrome-extension.zip'),
+          }
+          json.dump(m, open('site/latest.json', 'w'), ensure_ascii=False, indent=2)
+          repo = os.environ['GITHUB_REPOSITORY']
+          open('site/index.html', 'w').write(f'<meta http-equiv="refresh" content="0; url=https://github.com/{repo}/releases/latest">')
+          print(json.dumps(m, ensure_ascii=False, indent=2))
+          PY
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
