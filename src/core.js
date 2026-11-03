@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.8';
+  const VERSION = '0.6.0';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -208,6 +208,51 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   //  macOS: console 메시지를 메인 프로세스 훅이 받아 BrowserWindow.setOpacity / nativeTheme 적용
   //  Windows: 감시자(launch.ps1)가 window.__drbSkin.config 를 직접 읽어 Win32 로 적용 (메시지는 무시됨)
   let lastDesktopSent = '';
+  // Windows 감시자 즉시 알림: 감시자가 CDP Runtime.addBinding 으로 window.__drbNotify 를 만들어 두면,
+  // 상태가 바뀔 때(투명도·다크·메뉴, 알림창, 업데이트 요청) 한 번 "찔러" 감시자가 바로 상태를 읽어 가게 한다.
+  // 바인딩이 없으면(macOS, 웹, 이전 감시자) 아무 일도 하지 않는다. 감시자는 주기 확인도 계속 하므로 유실은 없다.
+  const pokeHost = (why) => {
+    const f = window.__drbNotify;
+    if (typeof f !== 'function') return false;
+    try {
+      f(String(why || 'state'));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // 다크 모드에서 흰 배경이 바뀌는 색(명도 level%) = 시작 덮개 색
+  const darkBgHex = () => {
+    const v = Math.round((Math.max(DARK_LEVEL_MIN, Math.min(DARK_LEVEL_MAX, Number(config.global.dark.level) || DARK_LEVEL_DEFAULT)) / 100) * 255);
+    const h = v.toString(16).padStart(2, '0');
+    return '#' + h + h + h;
+  };
+  // 시작 덮개(early.js / macOS 훅) 설정 저장 + 해제
+  //  - localStorage 'drb-early': 다음 시작 때 early.js 가 동기로 읽는다
+  //  - html[data-drb-light]: 다크 모드가 꺼져 있으면 덮개 CSS 전체 무효
+  //  - html[data-drb-ready]: 다크 모드 CSS 가 적용되고 Dooray 화면(사이드바)이 그려졌으면 덮개를 걷는다
+  const coreStartedAt = Date.now();
+  let loaded = false; // 설정(IndexedDB)을 읽은 뒤 true
+  let lastEarly = null;
+  const syncEarly = () => {
+    const on = !!config.global.dark.enabled;
+    const v = on ? JSON.stringify({ bg: darkBgHex() }) : '';
+    if (v !== lastEarly) {
+      lastEarly = v;
+      try {
+        if (on) localStorage.setItem('drb-early', v);
+        else localStorage.removeItem('drb-early');
+      } catch {}
+    }
+    root.toggleAttribute('data-drb-light', !on);
+  };
+  const markReady = () => {
+    if (root.hasAttribute('data-drb-ready')) return;
+    const on = !!config.global.dark.enabled;
+    // 메인 창은 사이드바(Dooray Skin 버튼)가, 따로 띄운 채팅 창은 대화방 제목이 그려지면
+    const drawn = !!document.querySelector(/^\/messenger\/?$/.test(location.pathname) ? '[data-drb-sidebar-btn]' : '[data-drb-sidebar-btn],[data-testid="channel-header-title"]');
+    if (!on || (document.getElementById(THEME_STYLE_ID) && drawn) || Date.now() - coreStartedAt > 3500) root.setAttribute('data-drb-ready', '');
+  };
   // 창 안에 뜨는 이미지 확대 보기·이미지 편집 화면이 열려 있는 동안은 창을 불투명하게. 닫으면 원래 투명도로.
   // (창 투명도는 창 전체에 걸려 화면 일부만 불투명하게 할 수 없다. 파일·메일 미리보기는 별도 창이라 호스트가 처리)
   const VIEWER_SEL = ['IMAGE_PREVIEW', 'IMAGE_EDITOR'].map((t) => `[data-testid="${t}"]`).join(',');
@@ -217,10 +262,18 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   const applyWindowOpacity = () => {
     if (!IS_DESKTOP) return;
     const v = effectiveOpacity();
-    const msg = JSON.stringify({ windowOpacity: v / 100, dark: !!(config.global.dark.enabled && config.global.dark.titleBar) });
+    const dk = config.global.dark;
+    const msg = JSON.stringify({
+      windowOpacity: v / 100,
+      dark: !!(dk.enabled && dk.titleBar),
+      early: dk.enabled ? darkBgHex() : null, // macOS 훅: 다음 시작 때 덮개 색
+      level: dk.level,
+      hideMenu: !!config.global.hideMenu,
+    });
     if (msg === lastDesktopSent) return;
     lastDesktopSent = msg;
     console.debug('__DRB__:' + msg);
+    pokeHost('state');
   };
   // ---------------- theme color (파란 계열 → 지정 색) ----------------
   // 두레이 CSS 는 디자인 토큰(--color-*)과 하드코딩 hex(#1e88e5, #125de6 ...)가 섞여 있어 변수만 바꿔서는 부족하다.
@@ -636,10 +689,12 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     let st = document.getElementById(THEME_STYLE_ID);
     const themeOn = t.enabled && isHex6(t.color) && t.color.toLowerCase() !== base.toLowerCase();
     const darkOn = !!d.enabled;
+    syncEarly();
     if (!themeOn && !darkOn) {
       st?.remove();
       clearInterval(themeWatch);
       themeWatch = 0;
+      markReady();
       return;
     }
     const text =
@@ -656,6 +711,7 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     while (after && !/^(style|link)$/i.test(after.tagName)) after = after.nextElementSibling;
     if (st.parentNode !== parent || after) parent.appendChild(st);
     if (!themeWatch) themeWatch = setInterval(applyTheme, 1500); // 런타임에 추가되는 규칙(styled-components 등) 반영
+    markReady();
   };
   const scheduleTheme = () => {
     clearTimeout(themeTimer);
@@ -816,6 +872,7 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
       if (!url) return flash('이 릴리스에 Windows 설치 파일이 없습니다. 릴리스 페이지에서 받아 주세요.');
       updateBusy = true;
       window.__drbUpdateRequest = { url, version: update.version };
+      pokeHost('update');
     } else {
       window.open(update.page, '_blank', 'noopener');
       return flash('릴리스 페이지에서 DooraySkin-chrome-extension.zip 을 받아 기존 폴더에 덮어쓴 뒤, 확장 프로그램 화면에서 새로고침(↻) 하세요.');
@@ -1334,6 +1391,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
             const c = m.contents;
             toastQueue.push({ title: String(c.title || ''), body: String(c.body || ''), channelId: c.channelId != null ? String(c.channelId) : '', at: Date.now(), ...toastColors() });
             if (toastQueue.length > 20) toastQueue.splice(0, toastQueue.length - 20);
+            pokeHost('toast');
             return undefined;
           }
         }
@@ -1379,6 +1437,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     ensureSidebarButton();
     installToastHook();
     applyWindowOpacity();
+    if (loaded && !root.hasAttribute('data-drb-ready')) applyTheme();
   };
   new MutationObserver(() => {
     if (!timer) timer = setTimeout(tick, 150);
@@ -1423,6 +1482,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
   };
 
   load().then(() => {
+    loaded = true;
     tick();
     applyAll();
     checkUpdate();

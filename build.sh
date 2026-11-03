@@ -42,14 +42,14 @@ P=installer/windows/payload
 TMPD=$(mktemp -d)
 for f in common.ps1 launch.ps1 uninstall.ps1 setup.ps1 toast-host.ps1; do bom_crlf "$P/$f" > "$TMPD/$f"; done
 crlf "$P/launch.vbs" > "$TMPD/launch.vbs"
-cp src/core.js "$TMPD/"
+cp src/core.js src/early.js "$TMPD/"
 S=dist/DooraySkin-Setup.cmd
 {
   crlf installer/windows/setup-head.cmd
   printf '#DRB_PS_BEGIN\r\n'
   printf '# Dooray Skin v%s\r\n' "$VER"
   printf '$EmbeddedFiles = @{\r\n'
-  for f in core.js common.ps1 launch.ps1 launch.vbs uninstall.ps1 setup.ps1 toast-host.ps1; do
+  for f in core.js early.js common.ps1 launch.ps1 launch.vbs uninstall.ps1 setup.ps1 toast-host.ps1; do
     printf "  '%s' = '%s'\r\n" "$f" "$(base64 -i "$TMPD/$f" | tr -d '\n')"
   done
   printf '}\r\n'
@@ -63,7 +63,7 @@ rm -rf "$TMPD"
 
 # ---------- chrome extension ----------
 C=dist/chrome; mkdir -p "$C"
-cp chrome-extension/manifest.json src/core.js "$C/"; bom_crlf chrome-extension/README.txt > "$C/README.txt"
+cp chrome-extension/manifest.json src/core.js src/early.js "$C/"; bom_crlf chrome-extension/README.txt > "$C/README.txt"
 (cd "$C" && zip -qr ../DooraySkin-chrome-extension.zip .)
 
 echo "built v$VER"

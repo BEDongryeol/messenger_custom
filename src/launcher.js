@@ -118,7 +118,7 @@ function launchDooray(args = []) {
 }
 
 // ---------- main-process hook (Dooray 메인 프로세스 안에서 실행됨) ----------
-function mainHook(CORE_SRC, HOOK_LOG) {
+function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
   if (global.__drbHooked) return JSON.stringify({ ok: true, already: true, pid: process.pid });
   global.__drbHooked = true;
   const req = typeof require === 'function' ? require : process.mainModule.require;
@@ -131,6 +131,34 @@ function mainHook(CORE_SRC, HOOK_LOG) {
   };
   hlog('hook installed');
   const isDooray = (u) => /^https:\/\/([a-z0-9-]+\.)*dooray\.com\//i.test(u || '');
+  // 시작 덮개: 다크 모드 사용자가 Dooray 를 켤 때 밝은 화면이 번쩍이지 않게, 대화 화면 문서가 정해지는 순간(did-navigate)
+  // 다크 배경색 덮개 CSS 를 넣는다. core.js 가 다크 모드를 적용하면 html[data-drb-ready] 로 걷히고, 4초 뒤엔 스스로 사라진다.
+  // 색은 core.js 가 보낸 early 값을 EARLY_FILE 에 저장해 다음 실행 때 쓴다. (src/early.js 의 CSS 와 같은 내용 유지)
+  const EARLY_URL_RE = /^https:\/\/([a-z0-9-]+\.)*dooray\.com\/messenger(?:\/?(?:[?#]|$)|\/(?:popup|channels)\/\d+)/i;
+  let earlyBg = null;
+  try {
+    const e = JSON.parse(fs.readFileSync(EARLY_FILE, 'utf8'));
+    if (e && /^#[0-9a-f]{6}$/i.test(e.bg)) earlyBg = e.bg;
+  } catch {}
+  const earlyCss = (bg) =>
+    `html:not([data-drb-light]){background:${bg}!important;color-scheme:dark}` +
+    `html:not([data-drb-light])::after{content:"";position:fixed;inset:0;z-index:2147483647;background:${bg};pointer-events:none;` +
+    `transition:opacity .25s,visibility .25s;animation:drb-early-out .3s ease 4s forwards}` +
+    `html[data-drb-ready]::after{opacity:0;visibility:hidden}` +
+    `@keyframes drb-early-out{to{opacity:0;visibility:hidden}}`;
+  const putEarly = (wc, url) => {
+    if (!earlyBg || !EARLY_URL_RE.test(url || '') || wc.isDestroyed()) return;
+    wc.insertCSS(earlyCss(earlyBg)).then(() => hlog('early css', wc.id, earlyBg)).catch((e) => hlog('early css error', String(e && e.message)));
+  };
+  const saveEarly = (bg) => {
+    const v = typeof bg === 'string' && /^#[0-9a-f]{6}$/i.test(bg) ? bg : null;
+    if (v === earlyBg) return;
+    earlyBg = v;
+    try {
+      if (v) fs.writeFileSync(EARLY_FILE, JSON.stringify({ bg: v }));
+      else fs.rmSync(EARLY_FILE, { force: true });
+    } catch {}
+  };
   let opacity = 1;
   // 투명도는 대화 창(앱 메인 창 = file:// 셸, 메신저 화면, 따로 띄운 채팅 창)에만 적용.
   // 이미지·파일·메일 미리보기, 메일·업무·캘린더 작성, 조직도 등 나머지 창은 항상 불투명.
@@ -214,6 +242,7 @@ function mainHook(CORE_SRC, HOOK_LOG) {
     try {
       const m = JSON.parse(msg.slice(8));
       if (m.update && typeof m.update.url === 'string') doUpdate(m.update);
+      if ('early' in m) saveEarly(m.early);
       if (typeof m.windowOpacity === 'number') {
         opacity = Math.max(0.3, Math.min(1, m.windowOpacity));
         BrowserWindow.getAllWindows().forEach(applyOpacity);
@@ -232,6 +261,7 @@ function mainHook(CORE_SRC, HOOK_LOG) {
     if (wc.__drb) return;
     wc.__drb = true;
     hlog('attach', wc.id, wc.getURL().slice(0, 80), 'loading=' + wc.isLoading());
+    wc.on('did-navigate', (_e, url) => putEarly(wc, url));
     wc.on('dom-ready', () => inject(wc, 'dom-ready'));
     wc.on('did-navigate-in-page', () => inject(wc, 'in-page'));
     wc.on('console-message', onConsole);
@@ -323,7 +353,7 @@ async function main() {
   const port = await freePort();
   log('Dooray 실행 (inspect port', port, ')');
   launchDooray([`--inspect=127.0.0.1:${port}`]);
-  const expr = `(${mainHook.toString()})(${JSON.stringify(CORE)}, ${JSON.stringify(path.join(DATA_DIR, 'hook.log'))})`;
+  const expr = `(${mainHook.toString()})(${JSON.stringify(CORE)}, ${JSON.stringify(path.join(DATA_DIR, 'hook.log'))}, ${JSON.stringify(path.join(DATA_DIR, 'early.json'))})`;
   const out = await cdpEvaluate(port, expr);
   log('hook result', out);
   const parsed = JSON.parse(out || '{}');

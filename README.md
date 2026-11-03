@@ -21,6 +21,8 @@ Dooray 메신저 대화방별 배경 이미지 + 창 투명도 + 테마 색 커�
 - 이미지: 투명 배경에 어두운 그림(아이콘 스프라이트)은 캔버스로 명도를 뒤집은 blob URL 로 교체. 사진·로고는 그대로
 - `html{color-scheme:dark}` 로 스크롤바·입력창 같은 브라우저 기본 UI 도 어둡게. 설정 패널도 같이 어두워짐
 - 창 제목 표시줄("창 제목 표시줄도 어둡게", 데스크톱): Windows 는 감시자가 `DwmSetWindowAttribute`(다크 모드 + 캡션 색을 배경 밝기에 맞춤) 를 외부에서 호출, macOS 는 메인 프로세스 훅이 `nativeTheme.themeSource` 를 바꿈
+- 시작 덮개: 다크 모드에서 Dooray 를 켜거나 새로고침할 때 밝은 화면이 번쩍이지 않도록, 대화 화면 문서가 생기는 즉시 다크 배경색 덮개를 깔고 core.js 가 다크 CSS 를 적용하고 화면(사이드바/대화방 제목)이 그려지면 `html[data-drb-ready]` 로 걷는다. 4초 뒤엔 CSS 만으로 사라진다. 웹 확장은 `early.js`(document_start), macOS 는 메인 프로세스 훅의 `insertCSS`(did-navigate), Windows 는 CDP `Page.addScriptToEvaluateOnNewDocument`. 색은 localStorage `drb-early`(macOS 는 `early.json`)
+- Windows 감시자(v0.6.0~): 브라우저 CDP 연결 하나를 유지하고 `Target.setDiscoverTargets` 로 창 생성·주소 변경·닫힘을 이벤트로 받는다. 각 화면에 flatten 세션으로 붙어 `Runtime.addBinding('__drbNotify')` 를 달고, core.js 가 상태(투명도·다크·메뉴·알림창·업데이트)가 바뀔 때 호출하면 즉시 읽는다. 바인딩 확인 전 1초, 확인 후 2.5초마다 확인. 연결 실패 또는 12초 동안 화면 상태를 못 읽으면 이전 0.8초 확인 방식으로 전환. 창 안 이미지 보기 투명도는 창별로 처리
 - 새 메시지 알림창(Windows): Windows Dooray 는 알림창(`DoorayMessenger.ToastWnd`)을 GDI 로 직접 그려 CSS 다크 모드가 닿지 않는다. 다크 모드 + "새 메시지 알림창도 어둡게"(기본 켜짐)이면 core.js 가 `chrome.webview.postMessage` 의 `application:notification` 을 가로채고, 감시자가 `toast-host.ps1`(WinForms)로 어두운 알림창을 띄운다. 클릭하면 Dooray 를 앞으로 가져오고 `mainView:showChannel` 로 그 방을 연다. 감시자가 없으면 원래 알림창이 그대로 뜬다. macOS 는 기본 알림이라 시스템 화면 모드를 따른다
 - Windows 의 상단 메뉴 바(파일·도구·보기…)는 다크로 칠할 공개 API 가 없어, 투명도 박스의 "상단 메뉴 바 숨기기" 옵션으로 `SetMenu(hwnd, null)` 로 떼어낸다(끄면 복원)
 
@@ -51,6 +53,7 @@ installer/windows/          Windows 설치 파일 구성요소
   payload/setup.ps1         설치: 구버전 감시자·Dooray 종료, 파일 배치, Dooray 탐색, 바로가기/자동실행 교체(백업), 앱 목록 등록
   payload/common.ps1        Dooray 탐색, CDP 클라이언트, Win32 (투명도, 제목 표시줄 다크, 메뉴 바)
   payload/launch.ps1        런처 + 감시자
+  src/early.js              시작 덮개 (웹 확장 document_start, Windows 새 문서마다)
   payload/toast-host.ps1    다크 모드 알림창 (WinForms, 감시자가 실행, Dooray 종료 시 함께 종료)
   payload/launch.vbs        콘솔 창 없이 launch.ps1 실행
   payload/uninstall.ps1     제거 + 바로가기 복원

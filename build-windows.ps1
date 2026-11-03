@@ -21,10 +21,10 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 
 # ---------- payload (ps1: UTF-8 BOM + CRLF, 나머지: CRLF) ----------
 $P = 'installer\windows\payload'
-$files = @('core.js', 'common.ps1', 'launch.ps1', 'launch.vbs', 'uninstall.ps1', 'setup.ps1', 'toast-host.ps1')
+$files = @('core.js', 'early.js', 'common.ps1', 'launch.ps1', 'launch.vbs', 'uninstall.ps1', 'setup.ps1', 'toast-host.ps1')
 foreach ($f in @('common.ps1', 'launch.ps1', 'uninstall.ps1', 'setup.ps1', 'toast-host.ps1')) { [IO.File]::WriteAllText("$tmp\$f", (Crlf (Read-Text "$P\$f")), $utf8bom) }
 [IO.File]::WriteAllText("$tmp\launch.vbs", (Crlf (Read-Text "$P\launch.vbs")), $utf8)
-Copy-Item 'src\core.js' "$tmp\core.js"
+Copy-Item 'src\core.js' "$tmp\core.js"; Copy-Item 'src\early.js' "$tmp\early.js"
 
 # ---------- exe ----------
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
