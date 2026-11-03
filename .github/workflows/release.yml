@@ -1,0 +1,99 @@
+# main 에 src/core.js 의 VERSION 이 올라간 커밋이 들어오면 자동 빌드 → GitHub Release(vX.Y.Z) 생성.
+# 사용자 PC 의 Dooray Skin 은 이 Release(최신)를 보고 업데이트 알림을 띄운다.
+# 같은 버전 Release 가 이미 있으면 아무것도 하지 않는다 (README 등 문서 커밋은 알림 없음).
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'installer/**'
+      - 'chrome-extension/**'
+      - 'build.sh'
+      - 'build-windows.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -o "VERSION = '[0-9.]*'" src/core.js | grep -o "[0-9.]*")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"; echo "v$VER 이미 릴리스됨 → 건너뜀"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"; echo "v$VER 새 릴리스"
+          fi
+
+  build-mac:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            dist/DooraySkin-mac.zip
+            dist/DooraySkin-chrome-extension.zip
+
+  build-windows:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/DooraySkin-Setup.exe
+            dist/DooraySkin-Setup.cmd
+            dist/DooraySkin-windows.zip
+
+  release:
+    needs: [check, build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ needs.check.outputs.version }}
+        run: |
+          ls -la out
+          cat > notes.md <<'NOTES'
+          ## 업데이트 방법
+          - **이미 v0.5.0 이상을 쓰는 중**: Dooray Skin 패널 맨 위 알림에서 **[업데이트]** 를 누르면 자동 설치 후 Dooray 가 다시 시작됩니다. (웹 확장은 아래 파일로 직접 교체)
+          - **처음 설치 / v0.4.0 이하**: 아래 파일을 받아 실행하세요.
+
+          | 환경 | 파일 |
+          |-|-|
+          | Mac | `DooraySkin-mac.zip` → 압축 풀고 `Dooray Skin` 더블클릭 |
+          | Windows | `DooraySkin-Setup.exe` 더블클릭 (막히면 `DooraySkin-Setup.cmd`) |
+          | 웹 (Chrome/Edge/Whale) | `DooraySkin-chrome-extension.zip` |
+          NOTES
+          gh release create "v$VER" out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Dooray Skin v$VER" --notes-file notes.md --generate-notes
