@@ -83,7 +83,9 @@ Windows 재설치/업데이트 시: `setup.ps1` 이 먼저 구버전 감시자(�
 1. `src/core.js` 의 `VERSION` 을 올려서 main 에 커밋 (`chrome-extension/manifest.json` 의 version 도 같이)
 2. GitHub Actions(`.github/workflows/release.yml`)가 macOS·Windows 러너에서 빌드해 Release `vX.Y.Z` 를 만든다
    (Mac 앱 zip, Setup.exe/cmd, windows zip, 크롬 확장 zip). 같은 버전 Release 가 있으면 건너뛰므로 문서 커밋은 배포되지 않는다
-3. 사용자 PC 의 Dooray Skin 이 6시간마다 최신 Release 를 확인 → 새 버전이면 패널 맨 위 알림 + 사이드바 버튼 빨간 점
+3. 사용자 PC 의 Dooray Skin 이 패널을 열 때(마지막 확인 후 10분 경과 시)와 1시간마다 새 버전 확인 → 새 버전이면 패널 맨 위 알림 + 사이드바 버튼 빨간 점
+   - 확인 대상: GitHub Pages 의 `https://bedongryeol.github.io/messenger_custom/latest.json` (Release 직후 Actions 가 갱신하는 정적 파일, API 호출 한도 없음)
+   - Pages 가 안 되면 GitHub API 로 대체 (비로그인 IP 당 시간 60회 한도라 예비용). 같은 PC 의 창·탭은 결과를 공유
 4. **[업데이트]**
    - macOS 앱: 메인 프로세스 훅이 `DooraySkin-mac.zip` 을 받아 새 `Dooray Skin.app` 실행 → 자기 설치 → Dooray 재시작
    - Windows 앱: 감시자가 `DooraySkin-Setup.exe`(없으면 .cmd)를 받아 실행 → 덮어쓰기 설치 → Dooray 재시작

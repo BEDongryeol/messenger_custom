@@ -10,15 +10,19 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.1';
+  const VERSION = '0.5.2';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
   const IS_WIN = /Windows/i.test(navigator.userAgent);
   // 업데이트 확인: 공개 저장소의 최신 GitHub Release (VERSION 이 올라간 main 커밋마다 Actions 가 만든다)
   const UPDATE_REPO = 'BEDongryeol/messenger_custom';
+  // 1순위: GitHub Pages 의 latest.json (CDN 정적 파일, API 호출 한도 없음. Release 때마다 Actions 가 갱신)
+  // 2순위: GitHub API (비로그인 IP 당 시간 60회 한도 → 같은 회사 IP 를 쓰면 막힐 수 있어 예비용)
+  const UPDATE_MANIFEST = 'https://bedongryeol.github.io/messenger_custom/latest.json';
   const UPDATE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
-  const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
+  const UPDATE_EVERY_MS = 60 * 60 * 1000; // 백그라운드 확인 주기
+  const UPDATE_ON_OPEN_MS = 10 * 60 * 1000; // 패널을 열 때 마지막 확인이 이보다 오래됐으면 다시 확인
   const root = document.documentElement;
   const STYLE_ID = 'drb-style';
   const MAX_EDGE = 2560;
@@ -736,27 +740,39 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     }
     render();
   };
-  const checkUpdate = async (force = false) => {
+  const fetchLatestInfo = async () => {
+    try {
+      const r = await fetch(UPDATE_MANIFEST, { cache: 'no-store' });
+      if (r.ok) {
+        const m = await r.json();
+        if (m && m.version) return { version: String(m.version).replace(/^v/, ''), page: m.page, mac: m.mac, winExe: m.winExe, winCmd: m.winCmd, chrome: m.chrome };
+      }
+    } catch {}
+    const r = await fetch(UPDATE_API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (!r.ok) return null;
+    const rel = await r.json();
+    const a = Object.fromEntries((rel.assets || []).map((x) => [x.name, x.browser_download_url]));
+    return {
+      version: String(rel.tag_name || '').replace(/^v/, ''),
+      page: rel.html_url,
+      mac: a['DooraySkin-mac.zip'],
+      winExe: a['DooraySkin-Setup.exe'],
+      winCmd: a['DooraySkin-Setup.cmd'],
+      chrome: a['DooraySkin-chrome-extension.zip'],
+    };
+  };
+  // maxAge: 마지막 확인이 이보다 최근이면 네트워크 없이 캐시 사용 (같은 PC 의 여러 창·탭이 localStorage 로 공유)
+  const checkUpdate = async (force = false, maxAge = UPDATE_EVERY_MS) => {
     try {
       const last = Number(localStorage.getItem('drb-update-checked') || 0);
-      if (!force && Date.now() - last < UPDATE_EVERY_MS) {
+      if (!force && Date.now() - last < maxAge) {
         const cached = JSON.parse(localStorage.getItem('drb-update-info') || 'null');
         update = cached && isNewer(cached.version, VERSION) ? cached : null;
         return markUpdate();
       }
-      const r = await fetch(UPDATE_API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
       localStorage.setItem('drb-update-checked', String(Date.now()));
-      if (!r.ok) return;
-      const rel = await r.json();
-      const a = Object.fromEntries((rel.assets || []).map((x) => [x.name, x.browser_download_url]));
-      const info = {
-        version: String(rel.tag_name || '').replace(/^v/, ''),
-        page: rel.html_url,
-        mac: a['DooraySkin-mac.zip'],
-        winExe: a['DooraySkin-Setup.exe'],
-        winCmd: a['DooraySkin-Setup.cmd'],
-        chrome: a['DooraySkin-chrome-extension.zip'],
-      };
+      const info = await fetchLatestInfo();
+      if (!info || !info.version) return;
       localStorage.setItem('drb-update-info', JSON.stringify(info));
       update = isNewer(info.version, VERSION) ? info : null;
       markUpdate();
@@ -1104,6 +1120,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     sr.innerHTML = PANEL_HTML;
     document.body.appendChild(host);
     positionPanel();
+    checkUpdate(false, UPDATE_ON_OPEN_MS); // 패널을 열 때 10분 넘게 지났으면 다시 확인
 
     sr.addEventListener('click', async (e) => {
       const t = e.target;

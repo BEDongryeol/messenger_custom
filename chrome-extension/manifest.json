@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dooray Skin (대화방 배경 · 테마 색 · 다크 모드)",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Dooray 메신저 대화방별 배경 이미지, 테마 색(스포이드), 다크 모드. 우측 사이드바의 Dooray Skin 버튼 또는 Alt+Shift+B.",
   "content_scripts": [
     {
