@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.2';
+  const VERSION = '0.5.3';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -478,18 +478,36 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
           const d = g.getImageData(0, 0, w, h);
           const px = d.data;
           const step = Math.max(1, Math.floor((w * h) / 20000)) * 4;
-          let sampled = 0, opaque = 0, lum = 0;
+          let sampled = 0, opaque = 0, lum = 0, darkNeutral = 0;
           for (let i = 0; i < px.length; i += step) {
             sampled++;
-            if (px[i + 3] > 12) { opaque++; lum += (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255; }
+            if (px[i + 3] > 12) {
+              opaque++;
+              const L = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+              lum += L;
+              if (L < 0.55 && Math.max(px[i], px[i + 1], px[i + 2]) - Math.min(px[i], px[i + 1], px[i + 2]) < 24) darkNeutral++;
+            }
           }
           const transparent = 1 - opaque / sampled;
           const avg = opaque ? lum / opaque : 1;
-          if (transparent > 0.15 && avg < 0.5) {
+          // 전체가 어두운 아이콘 이미지 → 전체 명도 반전
+          const mostlyDark = transparent > 0.15 && avg < 0.5;
+          // 회색·컴러·흰 아이콘이 섞인 스프라이트(예: 메시지 호버 도구 막대) → 어두운 무채색 픽셀만 밝게
+          const mixedSprite = !mostlyDark && transparent > 0.15 && opaque && darkNeutral / opaque > 0.08;
+          if (mostlyDark || mixedSprite) {
             for (let i = 0; i < px.length; i += 4) {
               if (!px[i + 3]) continue;
               const r = px[i], gg = px[i + 1], b = px[i + 2];
-              if (Math.max(r, gg, b) - Math.min(r, gg, b) < 16) { px[i] = 255 - r; px[i + 1] = 255 - gg; px[i + 2] = 255 - b; continue; }
+              const neutral = Math.max(r, gg, b) - Math.min(r, gg, b) < (mostlyDark ? 16 : 24);
+              if (mixedSprite) {
+                if (!neutral) continue;
+                const L = (0.2126 * r + 0.7152 * gg + 0.0722 * b) / 255;
+                if (L >= 0.55) continue;
+                const v = Math.round(255 * Math.min(0.9, Math.max(0.68, 1 - L)));
+                px[i] = px[i + 1] = px[i + 2] = v;
+                continue;
+              }
+              if (neutral) { px[i] = 255 - r; px[i + 1] = 255 - gg; px[i + 2] = 255 - b; continue; }
               const { h: hh, s, l } = rgbToHsl([r, gg, b]);
               const o = hslToRgb(hh, s, 1 - l);
               px[i] = o[0]; px[i + 1] = o[1]; px[i + 2] = o[2];
