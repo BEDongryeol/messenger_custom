@@ -40,7 +40,7 @@ xattr -cr "$M" 2>/dev/null || true
 # ---------- windows: 단일 cmd ----------
 P=installer/windows/payload
 TMPD=$(mktemp -d)
-for f in common.ps1 launch.ps1 uninstall.ps1 setup.ps1; do bom_crlf "$P/$f" > "$TMPD/$f"; done
+for f in common.ps1 launch.ps1 uninstall.ps1 setup.ps1 toast-host.ps1; do bom_crlf "$P/$f" > "$TMPD/$f"; done
 crlf "$P/launch.vbs" > "$TMPD/launch.vbs"
 cp src/core.js "$TMPD/"
 S=dist/DooraySkin-Setup.cmd
@@ -49,7 +49,7 @@ S=dist/DooraySkin-Setup.cmd
   printf '#DRB_PS_BEGIN\r\n'
   printf '# Dooray Skin v%s\r\n' "$VER"
   printf '$EmbeddedFiles = @{\r\n'
-  for f in core.js common.ps1 launch.ps1 launch.vbs uninstall.ps1 setup.ps1; do
+  for f in core.js common.ps1 launch.ps1 launch.vbs uninstall.ps1 setup.ps1 toast-host.ps1; do
     printf "  '%s' = '%s'\r\n" "$f" "$(base64 -i "$TMPD/$f" | tr -d '\n')"
   done
   printf '}\r\n'

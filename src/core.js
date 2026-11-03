@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.4';
+  const VERSION = '0.5.5';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -92,7 +92,7 @@
       windowOpacity: 100,
       defaultBg: { ...BG_DEFAULTS, enabled: false },
       theme: { enabled: false, color: THEME_BASE },
-      dark: { enabled: false, level: DARK_LEVEL_DEFAULT, titleBar: true },
+      dark: { enabled: false, level: DARK_LEVEL_DEFAULT, titleBar: true, toast: true },
       hideMenu: false, // Windows 데스크톱: 상단 메뉴 바(파일·도구·보기…) 숨기기
     },
     rooms: {},
@@ -118,6 +118,7 @@
           enabled: !!c.global?.dark?.enabled,
           level: Math.max(DARK_LEVEL_MIN, Math.min(DARK_LEVEL_MAX, Number(c.global?.dark?.level) || DARK_LEVEL_DEFAULT)),
           titleBar: c.global?.dark?.titleBar !== false,
+          toast: c.global?.dark?.toast !== false,
         },
         hideMenu: !!c.global?.hideMenu,
       },
@@ -928,6 +929,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     <div class="row win">
       <label class="chk"><input type="checkbox" data-d="enabled"> <b>다크 모드</b></label>
       <label class="chk" data-ref="titleRow" style="margin-top:4px"><input type="checkbox" data-d="titleBar"> 창 제목 표시줄도 어둡게</label>
+      <label class="chk" data-ref="toastRow" style="margin-top:4px"><input type="checkbox" data-d="toast"> 새 메시지 알림창도 어둡게 (Windows 앱)</label>
       <label class="t" style="margin-top:8px">배경 밝기 <span data-v="darkLevel"></span></label>
       <input type="range" min="${DARK_LEVEL_MIN}" max="${DARK_LEVEL_MAX}" data-d="level">
       <p class="muted">흰색·회색 배경은 어둡게, 글자는 밝게, 버튼·링크 색은 유지합니다. 어두운 아이콘 이미지는 자동으로 반전됩니다.</p>
@@ -1070,6 +1072,9 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     $('[data-ref=titleRow]').hidden = !IS_DESKTOP;
     $('[data-d=titleBar]').checked = dk.titleBar !== false;
     $('[data-d=titleBar]').disabled = !dk.enabled;
+    $('[data-ref=toastRow]').hidden = !(IS_DESKTOP && IS_WIN); // Mac 은 macOS 기본 알림이라 시스템 화면 모드를 따름
+    $('[data-d=toast]').checked = dk.toast !== false;
+    $('[data-d=toast]').disabled = !dk.enabled;
     $('[data-d=level]').value = dk.level;
     $('[data-v=darkLevel]').textContent = `${dk.level}%`;
     $('[data-ref=p]').classList.toggle('dark', !!dk.enabled);
@@ -1226,6 +1231,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       else if (scope && k === 'enabled') patchBg(scope, { enabled: t.checked });
       else if (t.dataset.d === 'enabled') patchDark({ enabled: t.checked });
       else if (t.dataset.d === 'titleBar') patchDark({ titleBar: t.checked });
+      else if (t.dataset.d === 'toast') patchDark({ toast: t.checked });
       else if (t.dataset.g === 'hideMenu') {
         config.global.hideMenu = t.checked;
         save();
@@ -1290,6 +1296,69 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
   };
   const togglePanel = () => (host ? closePanel() : openPanel());
 
+  // ---------------- Windows: 새 메시지 알림창 다크 모드 ----------------
+  // Windows Dooray 는 화면이 chrome.webview.postMessage({type:'application:notification', contents:{title,body,channelId}})
+  // 로 넘긴 내용을 자체 창(DoorayMessenger.ToastWnd, GDI 로 직접 그림)에 밝게 그린다 → CSS 다크 모드가 닿지 않음.
+  // 다크 모드 + 옵션이 켜져 있고 감시자(launch.ps1)가 살아 있을 때만 이 신호를 가로채 대기열에 넣고,
+  // 감시자가 toast-host.ps1 로 어두운 알림창을 띄운다. 감시자가 없으면 원래 알림창이 그대로 뜬다(알림 유실 방지).
+  const toastQueue = (window.__drbToastQueue = window.__drbToastQueue || []);
+  let toastHookState = 'off';
+  const toastColors = () => {
+    const lvl = Math.max(4, Math.min(30, Number(config.global.dark.level) || 11));
+    const v = Math.round((lvl + 5) * 2.55);
+    const hex = (n) => n.toString(16).padStart(2, '0');
+    return {
+      bg: '#' + hex(v) + hex(v) + hex(v),
+      fg: '#f0f0f0',
+      sub: '#a9a9a9',
+      accent: config.global.theme.enabled ? config.global.theme.color : '#2f8cff',
+    };
+  };
+  const installToastHook = () => {
+    const wv = window.chrome && window.chrome.webview;
+    if (!IS_DESKTOP || !IS_WIN || !wv || typeof wv.postMessage !== 'function' || wv.__drbHooked) return;
+    const orig = wv.postMessage;
+    const hooked = function (msg, ...rest) {
+      try {
+        const dk = config.global.dark;
+        const alive = Date.now() - (window.__drbWatcherAlive || 0) < 6000;
+        if (dk.enabled && dk.toast !== false && alive && typeof msg === 'string' && msg.includes('application:notification')) {
+          const m = JSON.parse(msg);
+          if (m && m.type === 'application:notification' && m.contents) {
+            const c = m.contents;
+            toastQueue.push({ title: String(c.title || ''), body: String(c.body || ''), channelId: c.channelId != null ? String(c.channelId) : '', at: Date.now(), ...toastColors() });
+            if (toastQueue.length > 20) toastQueue.splice(0, toastQueue.length - 20);
+            return undefined;
+          }
+        }
+      } catch {}
+      return orig.call(wv, msg, ...rest);
+    };
+    try {
+      wv.postMessage = hooked;
+    } catch {}
+    if (wv.postMessage !== hooked) {
+      try {
+        Object.defineProperty(wv, 'postMessage', { value: hooked, configurable: true, writable: true });
+      } catch {}
+    }
+    toastHookState = wv.postMessage === hooked ? 'on' : 'failed';
+    wv.__drbHooked = true;
+  };
+  // 알림창 클릭 → Windows 앱이 원래 보내는 'mainView:showChannel' 메시지를 흉내 내 그 대화방을 연다
+  const showChannel = (channelId) => {
+    const wv = window.chrome && window.chrome.webview;
+    try {
+      if (wv && typeof wv.dispatchEvent === 'function') {
+        wv.dispatchEvent(new MessageEvent('message', { data: { type: 'mainView:showChannel', contents: { channelId: String(channelId) } } }));
+        return 'dispatched';
+      }
+    } catch (e) {
+      return 'error: ' + e.message;
+    }
+    return 'unsupported';
+  };
+
   // ---------------- wiring ----------------
   let timer = 0;
   const tick = () => {
@@ -1302,6 +1371,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       render();
     }
     ensureSidebarButton();
+    installToastHook();
   };
   new MutationObserver(() => {
     if (!timer) timer = setTimeout(tick, 150);
@@ -1338,6 +1408,8 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     setDark: (enabled = true, level) => patchDark(level ? { enabled, level: Number(level) } : { enabled }),
     get themeBase() { return detectThemeBase(); },
     get update() { return update; },
+    showChannel,
+    get toastHook() { return toastHookState; },
     checkUpdate: () => checkUpdate(true),
     updateFailed,
   };

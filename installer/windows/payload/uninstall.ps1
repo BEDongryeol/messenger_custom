@@ -3,7 +3,7 @@ try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 $data = Join-Path $env:APPDATA 'DooraySkin'
 $me = $PID
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)DooraySkin\\launch\.ps1' } |
+  Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)DooraySkin\\(launch|toast-host)\.ps1' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $shell = New-Object -ComObject WScript.Shell
 $restored = 0

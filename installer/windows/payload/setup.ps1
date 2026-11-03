@@ -19,7 +19,7 @@ Write-Host '== Dooray Skin 설치 =='
 # 0) 구버전 감시자(launch.ps1) 와 Dooray 종료: 옛 감시자가 살아 있으면 뮤텍스를 쥔 채 메모리의 옛 core.js 를 계속 주입한다
 $me = $PID
 $old = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)DooraySkin\\launch\.ps1' }
+  Where-Object { $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)DooraySkin\\(launch|toast-host)\.ps1' }
 if ($old) {
   $old | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Write-Host "이전 Dooray Skin 감시자 종료: $(@($old).Count)개"
