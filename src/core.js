@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.7';
+  const VERSION = '0.5.8';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -208,9 +208,10 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   //  macOS: console 메시지를 메인 프로세스 훅이 받아 BrowserWindow.setOpacity / nativeTheme 적용
   //  Windows: 감시자(launch.ps1)가 window.__drbSkin.config 를 직접 읽어 Win32 로 적용 (메시지는 무시됨)
   let lastDesktopSent = '';
-  // 이미지 확대 보기(창 안에 뜨는 검은 뷰어)가 열려 있는 동안은 창을 불투명하게. 닫으면 원래 투명도로.
-  // (창 투명도는 창 전체에 걸려 화면 일부만 불투명하게 할 수 없다)
-  const imageViewerOpen = () => !!document.querySelector('[data-testid="IMAGE_PREVIEW"]');
+  // 창 안에 뜨는 이미지 확대 보기·이미지 편집 화면이 열려 있는 동안은 창을 불투명하게. 닫으면 원래 투명도로.
+  // (창 투명도는 창 전체에 걸려 화면 일부만 불투명하게 할 수 없다. 파일·메일 미리보기는 별도 창이라 호스트가 처리)
+  const VIEWER_SEL = ['IMAGE_PREVIEW', 'IMAGE_EDITOR'].map((t) => `[data-testid="${t}"]`).join(',');
+  const imageViewerOpen = () => !!document.querySelector(VIEWER_SEL);
   const effectiveOpacity = () =>
     imageViewerOpen() ? 100 : Math.max(30, Math.min(100, Number(config.global.windowOpacity) || 100));
   const applyWindowOpacity = () => {

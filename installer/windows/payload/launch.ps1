@@ -119,8 +119,12 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
   }
   $op = $null
   $chrome = $null
-  # 이미지·파일 미리보기 창은 투명도에서 제외: 디버그 대상 제목으로 창을 찾는다
-  $opaqueTitles = @(@($targets) | Where-Object { $_.url -match '/messenger/image/\d+/\d+|/preview-pages/' -and $_.title } | ForEach-Object { [string]$_.title })
+  # 투명도는 대화 창(메신저 화면, 따로 띄운 채팅 창)에만. 나머지(이미지·파일·메일 미리보기, 작성 창 등)는 불투명.
+  # Win32 창과 디버그 대상은 제목으로 짝짓는다. 대화 창과 제목이 같은 창은 대화 창을 지키기 위해 제외하지 않는다.
+  $chatRe = '^https://[^/]+/messenger/?([?#]|$)|^https://[^/]+/messenger/(popup|channels)/\d+(/threads/\d+)?/?([?#]|$)'
+  $pages = @(@($targets) | Where-Object { $_.type -eq 'page' -and $_.url -match '^https://([a-z0-9-]+\.)*dooray\.com/' -and $_.title })
+  $chatTitles = @($pages | Where-Object { $_.url -match $chatRe } | ForEach-Object { [string]$_.title })
+  $opaqueTitles = @($pages | Where-Object { $_.url -notmatch $chatRe -and $chatTitles -notcontains [string]$_.title } | ForEach-Object { [string]$_.title })
   foreach ($t in @($targets)) {
     if ($t.type -ne 'page' -or $t.url -notmatch '^https://([a-z0-9-]+\.)*dooray\.com/' -or -not $t.webSocketDebuggerUrl) { continue }
     $r = Invoke-DrbEvaluate $t.webSocketDebuggerUrl @($checkExpr)

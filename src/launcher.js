@@ -132,11 +132,13 @@ function mainHook(CORE_SRC, HOOK_LOG) {
   hlog('hook installed');
   const isDooray = (u) => /^https:\/\/([a-z0-9-]+\.)*dooray\.com\//i.test(u || '');
   let opacity = 1;
-  // 이미지·파일 미리보기 창은 투명도에서 제외 (항상 불투명)
-  const OPAQUE_URL_RE = /\/messenger\/image\/\d+\/\d+|\/preview-pages\//;
+  // 투명도는 대화 창(앱 메인 창 = file:// 셸, 메신저 화면, 따로 띄운 채팅 창)에만 적용.
+  // 이미지·파일·메일 미리보기, 메일·업무·캘린더 작성, 조직도 등 나머지 창은 항상 불투명.
+  // 주소가 아직 없는(막 만들어진) 창도 불투명으로 시작해 깜빡임을 막고, 주소가 정해지면 다시 판단한다.
+  const CHAT_URL_RE = /^file:|^https:\/\/[^/]+\/messenger\/?(?:[?#]|$)|^https:\/\/[^/]+\/messenger\/(?:popup|channels)\/\d+(?:\/threads\/\d+)?\/?(?:[?#]|$)/;
   const isOpaqueWindow = (w) => {
     try {
-      return OPAQUE_URL_RE.test(w.webContents.getURL());
+      return !CHAT_URL_RE.test(w.webContents.getURL() || "");
     } catch {
       return false;
     }
