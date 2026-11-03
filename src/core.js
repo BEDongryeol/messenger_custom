@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.0';
+  const VERSION = '0.5.1';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -1280,6 +1280,19 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     if (e.key === 'Escape' && host) closePanel();
   });
   window.addEventListener('resize', positionPanel);
+  // 패널 바깥을 누르면 닫기. 패널 안(Shadow DOM)과 사이드바 버튼(토글 담당)은 제외.
+  // 파일 선택 창·스포이드는 페이지로 pointerdown 이 오지 않아 영향 없음.
+  document.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!host) return;
+      const pathEls = e.composedPath ? e.composedPath() : [];
+      if (pathEls.includes(host)) return;
+      if (pathEls.some((n) => n && n.nodeType === 1 && n.hasAttribute('data-drb-sidebar-btn'))) return;
+      closePanel();
+    },
+    true,
+  );
 
   window.__drbSkin = {
     version: VERSION,
