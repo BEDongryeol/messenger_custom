@@ -175,6 +175,29 @@ public static System.Collections.Generic.List<System.IntPtr> ListWindows(uint pi
   }, System.IntPtr.Zero);
   return list;
 }
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetWindowText(System.IntPtr h, System.Text.StringBuilder s, int max);
+// 제목에 exclude 중 하나라도 들어 있는 창(이미지·파일 미리보기)은 불투명(255)으로 둔다
+public static int SetAlphaForPidEx(uint pid, byte alpha, string[] exclude) {
+  int n = 0;
+  EnumWindows(delegate (System.IntPtr h, System.IntPtr l) {
+    uint p; GetWindowThreadProcessId(h, out p);
+    if (p == pid && IsWindowVisible(h)) {
+      byte a = alpha;
+      if (exclude != null && exclude.Length > 0) {
+        var sb = new System.Text.StringBuilder(512);
+        GetWindowText(h, sb, 512);
+        string t = sb.ToString();
+        foreach (string x in exclude) { if (!string.IsNullOrEmpty(x) && t.Contains(x)) { a = 255; break; } }
+      }
+      long ex = GetWindowLongPtr(h, -20).ToInt64();
+      if ((ex & 0x80000) == 0) SetWindowLongPtr(h, -20, new System.IntPtr(ex | 0x80000));
+      SetLayeredWindowAttributes(h, 0, a, 2);
+      n++;
+    }
+    return true;
+  }, System.IntPtr.Zero);
+  return n;
+}
 public static int SetAlphaForPid(uint pid, byte alpha) {
   int n = 0;
   EnumWindows(delegate (System.IntPtr h, System.IntPtr l) {
@@ -192,11 +215,11 @@ public static int SetAlphaForPid(uint pid, byte alpha) {
 '@
 }
 
-function Set-DrbOpacity([int]$percent) {
+function Set-DrbOpacity([int]$percent, [string[]]$exclude = @()) {
   Initialize-DrbWin32
   $alpha = [byte][Math]::Round([Math]::Max(30, [Math]::Min(100, $percent)) * 2.55)
   $n = 0
-  foreach ($pr in (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue)) { $n += [DRB.Win]::SetAlphaForPid([uint32]$pr.Id, $alpha) }
+  foreach ($pr in (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue)) { $n += [DRB.Win]::SetAlphaForPidEx([uint32]$pr.Id, $alpha, [string[]]@($exclude)) }
   return $n
 }
 

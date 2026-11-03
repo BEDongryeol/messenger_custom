@@ -132,9 +132,18 @@ function mainHook(CORE_SRC, HOOK_LOG) {
   hlog('hook installed');
   const isDooray = (u) => /^https:\/\/([a-z0-9-]+\.)*dooray\.com\//i.test(u || '');
   let opacity = 1;
+  // 이미지·파일 미리보기 창은 투명도에서 제외 (항상 불투명)
+  const OPAQUE_URL_RE = /\/messenger\/image\/\d+\/\d+|\/preview-pages\//;
+  const isOpaqueWindow = (w) => {
+    try {
+      return OPAQUE_URL_RE.test(w.webContents.getURL());
+    } catch {
+      return false;
+    }
+  };
   const applyOpacity = (w) => {
     try {
-      if (!w.isDestroyed()) w.setOpacity(opacity);
+      if (!w.isDestroyed()) w.setOpacity(isOpaqueWindow(w) ? 1 : opacity);
     } catch {}
   };
   const PROBE =
@@ -228,7 +237,14 @@ function mainHook(CORE_SRC, HOOK_LOG) {
   };
   webContents.getAllWebContents().forEach(attach);
   app.on('web-contents-created', (_e, wc) => attach(wc));
-  app.on('browser-window-created', (_e, w) => applyOpacity(w));
+  // 새 창은 만들어질 때 주소가 비어 있으므로, 주소가 정해진 뒤(did-navigate)에 다시 적용해 미리보기 창을 불투명으로 돌린다
+  app.on('browser-window-created', (_e, w) => {
+    applyOpacity(w);
+    try {
+      w.webContents.on('did-navigate', () => applyOpacity(w));
+      w.webContents.on('did-navigate-in-page', () => applyOpacity(w));
+    } catch {}
+  });
   return JSON.stringify({ ok: true, pid: process.pid, wc: webContents.getAllWebContents().length });
 }
 

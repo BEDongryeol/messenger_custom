@@ -119,6 +119,8 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
   }
   $op = $null
   $chrome = $null
+  # 이미지·파일 미리보기 창은 투명도에서 제외: 디버그 대상 제목으로 창을 찾는다
+  $opaqueTitles = @(@($targets) | Where-Object { $_.url -match '/messenger/image/\d+/\d+|/preview-pages/' -and $_.title } | ForEach-Object { [string]$_.title })
   foreach ($t in @($targets)) {
     if ($t.type -ne 'page' -or $t.url -notmatch '^https://([a-z0-9-]+\.)*dooray\.com/' -or -not $t.webSocketDebuggerUrl) { continue }
     $r = Invoke-DrbEvaluate $t.webSocketDebuggerUrl @($checkExpr)
@@ -143,7 +145,7 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
     }
   }
   if ($null -ne $op -and ($op -ne $lastOp -or $op -lt 100)) {
-    $n = Set-DrbOpacity $op
+    $n = Set-DrbOpacity $op $opaqueTitles
     if ($op -ne $lastOp) { Write-DrbLog "opacity $op% -> $n window(s)" }
     $lastOp = $op
   }
