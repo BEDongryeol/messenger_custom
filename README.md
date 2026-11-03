@@ -43,7 +43,7 @@ styled-components 처럼 런타임에 늘어나는 규칙은 1.5초마다 규칙
 ```
 src/core.js                 UI·배경·테마 색 로직 (웹/데스크톱 공용). 채널 감지, 사이드바 버튼, 설정 패널, 스타일시트 재색칠, IndexedDB 저장
 src/launcher.js             macOS 런처 (Electron 메인 프로세스 훅)
-installer/mac/app/          Dooray Skin.app 실행 스크립트(자기 설치, Dock 타일 교체), dock.sh
+installer/mac/app/          Dooray Skin.app 실행 스크립트(자기 설치), dock.sh(제거 시 예전 버전이 바꾼 Dock 타일 원복용)
 installer/windows/          Windows 설치 파일 구성요소
   DooraySkinSetup.cs        DooraySkin-Setup.exe 스텁 (payload 를 리소스로 내장 → %APPDATA%\DooraySkin 에 풀고 setup.ps1 실행, 진행 창)
   setup-head.cmd            cmd 설치기 부트스트랩 (exe 가 막힌 PC 용)
@@ -68,7 +68,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1   # Window
 결과물 (`dist/`)
 | 파일 | 사용자 동작 |
 |-|-|
-| `DooraySkin-mac.zip` | 압축 해제 → `Dooray Skin` 더블클릭 (~/Applications 자기 설치, Dock 의 Dooray 타일 자동 교체) |
+| `DooraySkin-mac.zip` | 압축 해제 → `Dooray Skin` 더블클릭 (~/Applications 자기 설치. Dock 은 건드리지 않음, Launchpad/Spotlight 로 실행) |
 | `DooraySkin-Setup.exe` | 더블클릭 (진행 창 표시, 작업표시줄 고정/시작메뉴/바탕화면/시작프로그램 바로가기 자동 교체, 앱 목록 등록). 구버전 위에 그대로 실행하면 업데이트 |
 | `DooraySkin-Setup.cmd` | exe 실행이 막힌 PC 용, 같은 내용 |
 | `DooraySkin-windows.zip` | exe + cmd + README (첨부가 막힐 때) |
@@ -97,7 +97,7 @@ Windows 재설치/업데이트 시: `setup.ps1` 이 먼저 구버전 감시자(�
 > 쓰기 권한은 신뢰하는 사람에게만 주고, main 보호 규칙(PR 리뷰 필수)을 켜는 것을 권장한다.
 
 ## 제거
-- macOS: `Dooray Skin 제거.command` (Dock 원복)
+- macOS: `Dooray Skin 제거.command` (예전 버전이 바꾼 Dock 타일이 있으면 원복)
 - Windows: 시작 메뉴 → `Dooray Skin 제거`, 또는 설정 → 앱 → Dooray Skin → 제거, 또는 `DooraySkin-Setup.exe /uninstall` (바로가기·자동실행 원복)
 - 웹: 확장 프로그램 삭제
 

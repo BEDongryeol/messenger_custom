@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.5.3';
+  const VERSION = '0.5.4';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -22,7 +22,7 @@
   const UPDATE_MANIFEST = 'https://bedongryeol.github.io/messenger_custom/latest.json';
   const UPDATE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
   const UPDATE_EVERY_MS = 60 * 60 * 1000; // 백그라운드 확인 주기
-  const UPDATE_ON_OPEN_MS = 10 * 60 * 1000; // 패널을 열 때 마지막 확인이 이보다 오래됐으면 다시 확인
+  const UPDATE_ON_OPEN_MS = 2 * 60 * 1000; // 패널을 열 때 마지막 확인이 이보다 오래됐으면 다시 확인
   const root = document.documentElement;
   const STYLE_ID = 'drb-style';
   const MAX_EDGE = 2560;
@@ -1138,7 +1138,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     sr.innerHTML = PANEL_HTML;
     document.body.appendChild(host);
     positionPanel();
-    checkUpdate(false, UPDATE_ON_OPEN_MS); // 패널을 열 때 10분 넘게 지났으면 다시 확인
+    checkUpdate(false, UPDATE_ON_OPEN_MS); // 패널을 열 때 2분 넘게 지났으면 다시 확인
 
     sr.addEventListener('click', async (e) => {
       const t = e.target;

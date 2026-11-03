@@ -1,7 +1,7 @@
 #!/bin/bash
 # Dooray Skin.app 실행 파일 (더블클릭 한 번으로 전부 처리)
 #  1) 받은 위치(다운로드 폴더 등)에서 실행되면 ~/Applications/Dooray Skin.app 으로 자기 자신을 설치(업데이트)
-#  2) Dock 에 고정된 Dooray Messenger 를 Dooray Skin 으로 교체 (매 실행, 이미 교체됐으면 아무것도 안 함)
+#  2) (Dock 은 건드리지 않는다. 원하면 사용자가 Dooray Skin 을 직접 Dock 에 고정)
 #  3) 배경 기능을 넣어 Dooray 실행 (실행 중이면 자동 재시작)
 SELF_APP="$(cd "$(dirname "$0")/../.." && pwd -P)"
 TARGET="$HOME/Applications/Dooray Skin.app"
@@ -44,13 +44,9 @@ if [ ! -s "$ICNS" ] && [ -f "$APP/Contents/Resources/electron.icns" ]; then
   cp "$APP/Contents/Resources/electron.icns" "$ICNS" 2>/dev/null && touch "$TARGET" && log "icon copied from Dooray"
 fi
 
-# 2) Dock 교체
-n="$(/bin/bash "$RES/dock.sh" apply-replace "$TARGET" 2>>"$LOG")"
-[ "${n:-0}" -gt 0 ] 2>/dev/null && log "dock replaced: $n"
-
 # 3) 실행
 if ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Dooray Messenger" "$RES/launcher.js" >>"$LOG" 2>&1; then
-  [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. 앞으로 Dock/Launchpad 의 Dooray Skin 으로 실행하세요."
+  [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. 앞으로 Launchpad/Spotlight 의 Dooray Skin 으로 실행하세요."
 else
   notify "실행 실패. ~/Library/Application Support/DooraySkin/launcher.log 를 확인해 주세요."
   exit 1

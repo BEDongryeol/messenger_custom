@@ -2,7 +2,6 @@ Dooray Skin (Mac) 사용법
 
 1. 압축을 풀고 "Dooray Skin" 앱을 더블클릭하세요. 끝입니다.
    - 자동으로 ~/Applications 에 설치되고,
-   - Dock 에 고정된 Dooray Messenger 아이콘이 Dooray Skin 으로 바뀌고,
    - Dooray 가 Dooray Skin 적용 상태로 다시 실행됩니다.
    - 예전 버전이 이미 설치된 Mac 에서도 그냥 실행하면 됩니다 (그 자리에서 업데이트, 설정 유지).
 
@@ -17,8 +16,10 @@ Dooray Skin (Mac) 사용법
    - 전체: 모든 방 기본 배경, 설정 내보내기/가져오기
    - 테마: 다크 모드(창 제목 표시줄 포함), 테마 색(색 선택 / 스포이드 / 프리셋)
 
-4. 앞으로는 Dock 의 Dooray Skin(또는 Launchpad/Spotlight "Dooray Skin")으로 실행하세요.
+4. 앞으로는 Launchpad 나 Spotlight(⌘+Space) 에서 "Dooray Skin" 으로 실행하세요.
+   - Dock 에 두고 쓰려면: Dooray Skin 을 한 번 실행한 뒤 ~/Applications 폴더의 Dooray Skin 을 Dock 으로 끌어다 놓으세요.
+   - 기존 Dooray Messenger 아이콘으로 켜면 Dooray Skin 없이 켜집니다.
 
-제거: "Dooray Skin 제거.command" 실행 (Dock 도 원래대로 되돌립니다)
+제거: "Dooray Skin 제거.command" 실행 (예전 버전이 Dock 아이콘을 바꿨다면 원래대로 되돌립니다)
 업데이트: 새 버전이 나오면 Dooray Skin 패널 맨 위에 알림이 뜹니다. [업데이트]를 누르면 자동 설치 후 Dooray 가 다시 시작됩니다.
 문제 시: ~/Library/Application Support/DooraySkin/launcher.log 를 전달해 주세요.
