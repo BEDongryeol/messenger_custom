@@ -20,5 +20,5 @@ Dooray Skin (Mac) 사용법
 4. 앞으로는 Dock 의 Dooray Skin(또는 Launchpad/Spotlight "Dooray Skin")으로 실행하세요.
 
 제거: "Dooray Skin 제거.command" 실행 (Dock 도 원래대로 되돌립니다)
-업데이트: 새 DooraySkin-mac.zip 을 풀어 Dooray Skin 을 다시 실행
+업데이트: 새 버전이 나오면 Dooray Skin 패널 맨 위에 알림이 뜹니다. [업데이트]를 누르면 자동 설치 후 Dooray 가 다시 시작됩니다.
 문제 시: ~/Library/Application Support/DooraySkin/launcher.log 를 전달해 주세요.

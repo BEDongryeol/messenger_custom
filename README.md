@@ -55,6 +55,7 @@ installer/windows/          Windows 설치 파일 구성요소
 chrome-extension/           웹용 manifest
 build.sh                    macOS 에서 실행: mac 앱, cmd 설치기, 크롬 확장
 build-windows.ps1           Windows 에서 실행: DooraySkin-Setup.exe (+ cmd, zip). 외부 도구 없이 내장 csc.exe 사용
+.github/workflows/release.yml  VERSION 이 오른 main 커밋 → 자동 빌드·Release (자동 업데이트의 배포 원천)
 ```
 
 ## 빌드
@@ -77,6 +78,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build-windows.ps1   # Window
 
 Windows 재설치/업데이트 시: `setup.ps1` 이 먼저 구버전 감시자(옛 `core.js` 를 메모리에 들고 계속 주입)와 Dooray 를 종료하고, 파일을 덮어쓴 뒤 다시 실행합니다.
 이미 교체된 바로가기는 건드리지 않고, 바로가기 백업(`shortcut-backup.json`)은 처음 백업한 원본을 유지하므로 제거 시 원래 Dooray 로 돌아갑니다. 사용자 설정(IndexedDB)은 그대로 유지됩니다.
+
+## 배포와 자동 업데이트
+1. `src/core.js` 의 `VERSION` 을 올려서 main 에 커밋 (`chrome-extension/manifest.json` 의 version 도 같이)
+2. GitHub Actions(`.github/workflows/release.yml`)가 macOS·Windows 러너에서 빌드해 Release `vX.Y.Z` 를 만든다
+   (Mac 앱 zip, Setup.exe/cmd, windows zip, 크롬 확장 zip). 같은 버전 Release 가 있으면 건너뛰므로 문서 커밋은 배포되지 않는다
+3. 사용자 PC 의 Dooray Skin 이 6시간마다 최신 Release 를 확인 → 새 버전이면 패널 맨 위 알림 + 사이드바 버튼 빨간 점
+4. **[업데이트]**
+   - macOS 앱: 메인 프로세스 훅이 `DooraySkin-mac.zip` 을 받아 새 `Dooray Skin.app` 실행 → 자기 설치 → Dooray 재시작
+   - Windows 앱: 감시자가 `DooraySkin-Setup.exe`(없으면 .cmd)를 받아 실행 → 덮어쓰기 설치 → Dooray 재시작
+   - 웹 확장: Chrome 정책상 자동 설치 불가 → 릴리스 페이지 안내
+   - 다운로드 주소는 이 저장소의 Release 경로만 허용. 프로그램이 직접 받으므로 Gatekeeper/SmartScreen 경고가 없다
+   - Mac 앱 아이콘은 재배포하지 않고 설치 시 사용자 Mac 의 Dooray 아이콘을 복사한다
+
+> 주의: Release 를 만들 수 있는 사람(저장소 쓰기 권한)이 올린 코드가 모든 사용자의 Dooray 에서 실행된다.
+> 쓰기 권한은 신뢰하는 사람에게만 주고, main 보호 규칙(PR 리뷰 필수)을 켜는 것을 권장한다.
 
 ## 제거
 - macOS: `Dooray Skin 제거.command` (Dock 원복)

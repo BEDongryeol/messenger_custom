@@ -51,7 +51,38 @@ if (-not ($running -and $portUp)) {
 $core = [IO.File]::ReadAllText((Join-Path $data 'core.js'), [Text.Encoding]::UTF8)
 $injectExpr = "window.__DRB_HOST='desktop';`n" + $core + "`n;'injected'"
 # 페이지의 설정(window.__drbSkin.config.global)에서 창 투명도, 다크 모드(제목 표시줄), 메뉴 바 숨기기를 읽는다
-$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, op: (g&&g.windowOpacity)||100, dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]')}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
+$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, op: (g&&g.windowOpacity)||100, dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]'), upd: window.__drbUpdateRequest||null}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
+
+# 자동 업데이트: 페이지에서 [업데이트] 를 누르면 window.__drbUpdateRequest = { url, version } 가 생긴다.
+# Setup 을 받아 실행하면 setup.ps1 이 이 감시자와 Dooray 를 끄고 덮어쓴 뒤 다시 실행한다.
+# PowerShell 로 받은 파일에는 인터넷 표시(MOTW)가 붙지 않아 SmartScreen 경고가 없다.
+function Start-DrbUpdate($upd, [string]$wsUrl) {
+  $url = [string]$upd.url
+  if ($url -notmatch '^https://github\.com/BEDongryeol/messenger_custom/releases/download/[^/]+/DooraySkin-Setup\.(exe|cmd)$') {
+    Write-DrbLog "update url rejected: $url"
+    Invoke-DrbEvaluate $wsUrl @("window.__drbSkin&&window.__drbSkin.updateFailed&&window.__drbSkin.updateFailed('허용되지 않은 주소')") | Out-Null
+    return $false
+  }
+  $ext = [IO.Path]::GetExtension($url)
+  $dst = Join-Path $env:TEMP ('DooraySkin-Setup-' + ([string]$upd.version -replace '[^\d.]', '') + $ext)
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object System.Net.WebClient
+    $wc.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()   # 인터넷 다운로드는 사내 프록시를 따른다 (localhost 용 빈 프록시와 별개)
+    $wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+    Write-DrbLog "update download $url"
+    $wc.DownloadFile($url, $dst)
+  } catch {
+    Write-DrbLog ("update download failed: " + $_.Exception.Message)
+    Invoke-DrbEvaluate $wsUrl @("window.__drbSkin&&window.__drbSkin.updateFailed&&window.__drbSkin.updateFailed('다운로드 실패')") | Out-Null
+    return $false
+  }
+  Write-DrbLog "update run $dst"
+  if ($ext -eq '.exe') { Start-Process -FilePath $dst }
+  else { Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c "' + $dst + '"') }
+  return $true
+}
+$updating = $false
 
 $seen = @{}
 $lastOp = 100
@@ -78,6 +109,7 @@ while (Get-Process -Name DoorayMessenger -ErrorAction SilentlyContinue) {
       $op = [int]$state.op
       $chrome = @{ dark = [bool]$state.dark; level = [int]$state.level; menu = [bool]$state.hideMenu }
       if (-not $seen.ContainsKey($t.id)) { $seen[$t.id] = 1; Write-DrbLog ("active " + $t.url + " btn=" + $state.btn) }
+      if ($state.upd -and -not $updating) { $updating = Start-DrbUpdate $state.upd $t.webSocketDebuggerUrl }
     }
   }
   if ($null -ne $op -and ($op -ne $lastOp -or $op -lt 100)) {

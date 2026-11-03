@@ -19,5 +19,5 @@ Dooray Skin (Windows) 사용법
 
 제거: 시작 메뉴 > "Dooray Skin 제거" 또는 Windows 설정 > 앱 > Dooray Skin > 제거
       (바로가기를 원래 Dooray 로 되돌립니다)
-업데이트: 새 DooraySkin-Setup.exe 를 다시 실행
+업데이트: 새 버전이 나오면 Dooray Skin 패널 맨 위에 알림이 뜹니다. [업데이트]를 누르면 자동 설치 후 Dooray 가 다시 시작됩니다.
 문제 시: %APPDATA%\DooraySkin\launcher.log 를 전달해 주세요.

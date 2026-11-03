@@ -10,11 +10,15 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
   const IS_WIN = /Windows/i.test(navigator.userAgent);
+  // 업데이트 확인: 공개 저장소의 최신 GitHub Release (VERSION 이 올라간 main 커밋마다 Actions 가 만든다)
+  const UPDATE_REPO = 'BEDongryeol/messenger_custom';
+  const UPDATE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+  const UPDATE_EVERY_MS = 6 * 60 * 60 * 1000;
   const root = document.documentElement;
   const STYLE_ID = 'drb-style';
   const MAX_EDGE = 2560;
@@ -699,6 +703,90 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
       togglePanel();
     });
     item.after(clone);
+    if (update) markUpdate();
+  };
+
+  // ---------------- update ----------------
+  // 새 Release 가 있으면 패널 맨 위 알림 + 사이드바 버튼 빨간 점. [업데이트] 를 누르면
+  //  macOS 앱  : 메인 프로세스 훅(launcher.js)이 zip 을 받아 새 Dooray Skin.app 실행 → 자기 설치 후 Dooray 재시작
+  //  Windows 앱: 감시자(launch.ps1)가 window.__drbUpdateRequest 를 읽어 Setup 을 받아 실행 → 덮어쓰기 설치 후 재시작
+  //  웹 확장   : 자동 설치 불가(Chrome 정책) → 릴리스 페이지 안내
+  let update = null; // { version, page, mac, winExe, winCmd, chrome }
+  let updateBusy = false;
+  let updateDismissed = false;
+  const verParts = (v) => String(v || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const isNewer = (a, b) => {
+    const x = verParts(a);
+    const y = verParts(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  };
+  const markUpdate = () => {
+    const b = document.querySelector('[data-drb-sidebar-btn]');
+    if (b) {
+      let d = b.querySelector('[data-drb-dot]');
+      if (update && !d) {
+        d = document.createElement('span');
+        d.setAttribute('data-drb-dot', '1');
+        d.style.cssText = 'position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:#e5484d;pointer-events:none';
+        if (!b.style.position) b.style.position = 'relative';
+        b.appendChild(d);
+        b.setAttribute('title', `새 버전 v${update.version} 이 있습니다 · Dooray Skin (Alt+Shift+B)`);
+      } else if (!update && d) d.remove();
+    }
+    render();
+  };
+  const checkUpdate = async (force = false) => {
+    try {
+      const last = Number(localStorage.getItem('drb-update-checked') || 0);
+      if (!force && Date.now() - last < UPDATE_EVERY_MS) {
+        const cached = JSON.parse(localStorage.getItem('drb-update-info') || 'null');
+        update = cached && isNewer(cached.version, VERSION) ? cached : null;
+        return markUpdate();
+      }
+      const r = await fetch(UPDATE_API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+      localStorage.setItem('drb-update-checked', String(Date.now()));
+      if (!r.ok) return;
+      const rel = await r.json();
+      const a = Object.fromEntries((rel.assets || []).map((x) => [x.name, x.browser_download_url]));
+      const info = {
+        version: String(rel.tag_name || '').replace(/^v/, ''),
+        page: rel.html_url,
+        mac: a['DooraySkin-mac.zip'],
+        winExe: a['DooraySkin-Setup.exe'],
+        winCmd: a['DooraySkin-Setup.cmd'],
+        chrome: a['DooraySkin-chrome-extension.zip'],
+      };
+      localStorage.setItem('drb-update-info', JSON.stringify(info));
+      update = isNewer(info.version, VERSION) ? info : null;
+      markUpdate();
+    } catch (e) {
+      console.warn('[dooray-skin] update check failed', e);
+    }
+  };
+  const startUpdate = () => {
+    if (!update || updateBusy) return;
+    if (IS_DESKTOP && !IS_WIN) {
+      if (!update.mac) return flash('이 릴리스에 Mac 설치 파일이 없습니다. 릴리스 페이지에서 받아 주세요.');
+      updateBusy = true;
+      console.debug('__DRB__:' + JSON.stringify({ update: { url: update.mac, version: update.version } }));
+    } else if (IS_DESKTOP && IS_WIN) {
+      const url = update.winExe || update.winCmd;
+      if (!url) return flash('이 릴리스에 Windows 설치 파일이 없습니다. 릴리스 페이지에서 받아 주세요.');
+      updateBusy = true;
+      window.__drbUpdateRequest = { url, version: update.version };
+    } else {
+      window.open(update.page, '_blank', 'noopener');
+      return flash('릴리스 페이지에서 DooraySkin-chrome-extension.zip 을 받아 기존 폴더에 덮어쓴 뒤, 확장 프로그램 화면에서 새로고침(↻) 하세요.');
+    }
+    render();
+  };
+  // 런처/감시자가 업데이트에 실패하면 호출한다
+  const updateFailed = (msg) => {
+    updateBusy = false;
+    window.__drbUpdateRequest = null;
+    render();
+    flash(`업데이트 실패: ${msg || '알 수 없는 오류'}. 릴리스 페이지에서 직접 받아 주세요.`);
   };
 
   // ---------------- panel ----------------
@@ -750,6 +838,8 @@ button.eye svg{width:14px;height:14px}
 .muted{color:var(--mut);font-size:12px;margin:4px 0}
 hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
 .msg{color:var(--accent);font-size:12px;min-height:16px;margin:6px 0 0}
+.upd{background:color-mix(in srgb,var(--accent) 12%,var(--bg));border:1px solid var(--accent);border-radius:8px;padding:8px 10px;margin:0 0 10px}
+.upd .btns{margin-top:6px}
 [hidden]{display:none!important}`;
 
   const bgEditorHtml = (scope) => `
@@ -785,6 +875,10 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
 <style>${PANEL_CSS}</style>
 <div class="p" data-ref="p">
   <h1>Dooray Skin <button class="x" data-act="close" title="닫기">×</button></h1>
+  <div class="upd" data-ref="upd" hidden>
+    <div data-ref="updText"></div>
+    <div class="btns"><button class="primary" data-act="update">업데이트</button><button data-act="updLater">나중에</button></div>
+  </div>
   <div class="row win" data-ref="winRow">
     <label class="t">두레이 창 투명도 <span data-v="windowOpacity"></span></label>
     <input type="range" min="30" max="100" data-g="windowOpacity">
@@ -843,7 +937,8 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       <button data-act="import">가져오기</button>
       <input type="file" accept="application/json" data-ref="importFile" hidden>
     </div>
-    <p class="muted">방 키가 channelId 라서 같은 방이면 팀원끼리 JSON 공유 시 그대로 적용됩니다. v${VERSION}</p>
+    <p class="muted">방 키가 channelId 라서 같은 방이면 팀원끼리 JSON 공유 시 그대로 적용됩니다.</p>
+    <div class="btns"><span class="muted">현재 v${VERSION}</span><button data-act="checkUpdate">업데이트 확인</button></div>
   </section>
   <p class="msg" data-ref="msg"></p>
 </div>`;
@@ -902,6 +997,17 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
 
   const render = () => {
     if (!sr) return;
+    const showUpd = !!update && !updateDismissed;
+    $('[data-ref=upd]').hidden = !showUpd;
+    if (showUpd) {
+      $('[data-ref=updText]').textContent = updateBusy
+        ? `v${update.version} 를 받아 설치하는 중입니다. Dooray 가 잠시 후 다시 시작됩니다.`
+        : `새 버전 v${update.version} 이 있습니다 (현재 v${VERSION}). ` +
+          (IS_DESKTOP ? '[업데이트]를 누르면 자동으로 설치되고 Dooray 가 다시 시작됩니다.' : '웹은 확장 프로그램 파일을 직접 교체해야 합니다.');
+      $('[data-act=update]').hidden = updateBusy;
+      $('[data-act=updLater]').hidden = updateBusy;
+      $('[data-act=update]').textContent = IS_DESKTOP ? '업데이트' : '다운로드 페이지 열기';
+    }
     $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
     $$('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== tab));
 
@@ -1014,6 +1120,18 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       const scope = t.closest('[data-scope]')?.dataset.scope;
       const box = scope && $(`[data-scope=${scope}]`);
       if (act === 'close') closePanel();
+      if (act === 'update') return startUpdate();
+      if (act === 'updLater') {
+        updateDismissed = true;
+        return render();
+      }
+      if (act === 'checkUpdate') {
+        flash('업데이트 확인 중...');
+        await checkUpdate(true);
+        updateDismissed = false;
+        render();
+        return flash(update ? `새 버전 v${update.version} 이 있습니다.` : `최신 버전입니다 (v${VERSION}).`);
+      }
       if (act === 'eyedrop') {
         if (!('EyeDropper' in window)) return flash('이 환경은 스포이드를 지원하지 않습니다.');
         try {
@@ -1171,10 +1289,15 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     setTheme: (color, enabled = true) => patchTheme({ color: String(color).toLowerCase(), enabled }),
     setDark: (enabled = true, level) => patchDark(level ? { enabled, level: Number(level) } : { enabled }),
     get themeBase() { return detectThemeBase(); },
+    get update() { return update; },
+    checkUpdate: () => checkUpdate(true),
+    updateFailed,
   };
 
   load().then(() => {
     tick();
     applyAll();
+    checkUpdate();
+    setInterval(() => checkUpdate(), UPDATE_EVERY_MS);
   });
 })();

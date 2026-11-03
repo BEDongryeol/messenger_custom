@@ -153,12 +153,56 @@ function mainHook(CORE_SRC, HOOK_LOG) {
       })
       .catch((e) => hlog('inject-error', why, wc.id, url.slice(0, 80), String(e && e.message)));
   };
+  // 자동 업데이트: 페이지의 [업데이트] → 새 DooraySkin-mac.zip 을 받아 풀고 새 Dooray Skin.app 실행.
+  // 새 앱이 ~/Applications 에 자기 설치 → 런처가 버전 변경을 보고 이 Dooray 를 재시작한다.
+  // 브라우저가 아니라 메인 프로세스가 받으므로 quarantine 이 붙지 않아 Gatekeeper 경고가 없다.
+  const UPDATE_URL_RE = /^https:\/\/github\.com\/BEDongryeol\/messenger_custom\/releases\/download\/[^/]+\/DooraySkin-mac\.zip$/;
+  let updating = false;
+  const notifyPages = (js) =>
+    webContents.getAllWebContents().forEach((w) => {
+      try {
+        if (!w.isDestroyed() && isDooray(w.getURL())) w.executeJavaScript(js, true).catch(() => {});
+      } catch {}
+    });
+  const doUpdate = async (u) => {
+    if (updating) return;
+    updating = true;
+    try {
+      if (!UPDATE_URL_RE.test(String(u.url))) throw new Error('허용되지 않은 주소 ' + u.url);
+      const os = req('os');
+      const path = req('path');
+      const cp = req('child_process');
+      const doFetch = globalThis.fetch || req('electron').net.fetch;
+      hlog('update start', u.version, u.url);
+      const res = await doFetch(u.url);
+      if (!res.ok) throw new Error('다운로드 ' + res.status);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dooray-skin-'));
+      const zip = path.join(dir, 'DooraySkin-mac.zip');
+      fs.writeFileSync(zip, buf);
+      cp.execFileSync('/usr/bin/ditto', ['-x', '-k', zip, dir]);
+      const app = path.join(dir, 'Dooray Skin.app');
+      if (!fs.existsSync(path.join(app, 'Contents', 'MacOS', 'DooraySkin'))) throw new Error('zip 안에 Dooray Skin.app 이 없습니다');
+      // 혹시 다운로드 표시(quarantine)가 붙어 있으면 실행 전에 제거 (붙어 있으면 Gatekeeper 가 새 앱 실행을 막는다)
+      try {
+        cp.execFileSync('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', app]);
+      } catch {}
+      hlog('update downloaded', buf.length, app);
+      cp.spawn('/usr/bin/open', ['-n', app], { detached: true, stdio: 'ignore' }).unref();
+    } catch (e) {
+      updating = false;
+      const msg = String((e && e.message) || e);
+      hlog('update error', msg);
+      notifyPages(`window.__drbSkin && window.__drbSkin.updateFailed && window.__drbSkin.updateFailed(${JSON.stringify(msg)})`);
+    }
+  };
   const onConsole = (...args) => {
     const e = args[0];
     const msg = (e && typeof e.message === 'string' && e.message) || args[2];
     if (typeof msg !== 'string' || !msg.startsWith('__DRB__:')) return;
     try {
       const m = JSON.parse(msg.slice(8));
+      if (m.update && typeof m.update.url === 'string') doUpdate(m.update);
       if (typeof m.windowOpacity === 'number') {
         opacity = Math.max(0.3, Math.min(1, m.windowOpacity));
         BrowserWindow.getAllWindows().forEach(applyOpacity);

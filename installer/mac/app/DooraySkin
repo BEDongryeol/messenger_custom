@@ -11,6 +11,18 @@ LOG="$DATA/app.log"
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 notify() { /usr/bin/osascript -e "display notification \"$1\" with title \"Dooray Skin\"" >/dev/null 2>&1 || true; }
 
+# 0) Dooray 찾기
+APP=""
+for p in "/Applications/Dooray Messenger.app" "$HOME/Applications/Dooray Messenger.app"; do
+  [ -d "$p" ] && APP="$p" && break
+done
+[ -z "$APP" ] && APP="$(/usr/bin/mdfind "kMDItemCFBundleIdentifier == 'com.dooray.messenger'" 2>/dev/null | head -1)"
+if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+  notify "Dooray Messenger 앱을 찾지 못했습니다. 먼저 Dooray Messenger 를 설치해 주세요."
+  log "dooray app not found"
+  exit 1
+fi
+
 # 1) 자기 설치 / 업데이트
 if [ "$SELF_APP" != "$(cd "$TARGET" 2>/dev/null && pwd -P)" ]; then
   mkdir -p "$HOME/Applications"
@@ -26,22 +38,17 @@ if [ "$SELF_APP" != "$(cd "$TARGET" 2>/dev/null && pwd -P)" ]; then
 fi
 RES="$TARGET/Contents/Resources"
 
+# 아이콘: CI 빌드에는 Dooray 아이콘이 없으므로 이 Mac 에 설치된 Dooray 아이콘을 복사해 쓴다 (재배포하지 않음)
+ICNS="$RES/AppIcon.icns"
+if [ ! -s "$ICNS" ] && [ -f "$APP/Contents/Resources/electron.icns" ]; then
+  cp "$APP/Contents/Resources/electron.icns" "$ICNS" 2>/dev/null && touch "$TARGET" && log "icon copied from Dooray"
+fi
+
 # 2) Dock 교체
 n="$(/bin/bash "$RES/dock.sh" apply-replace "$TARGET" 2>>"$LOG")"
 [ "${n:-0}" -gt 0 ] 2>/dev/null && log "dock replaced: $n"
 
-# 3) Dooray 찾기 → 실행
-APP=""
-for p in "/Applications/Dooray Messenger.app" "$HOME/Applications/Dooray Messenger.app"; do
-  [ -d "$p" ] && APP="$p" && break
-done
-[ -z "$APP" ] && APP="$(/usr/bin/mdfind "kMDItemCFBundleIdentifier == 'com.dooray.messenger'" 2>/dev/null | head -1)"
-if [ -z "$APP" ] || [ ! -d "$APP" ]; then
-  notify "Dooray Messenger 앱을 찾지 못했습니다. 먼저 Dooray Messenger 를 설치해 주세요."
-  log "dooray app not found"
-  exit 1
-fi
-
+# 3) 실행
 if ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Dooray Messenger" "$RES/launcher.js" >>"$LOG" 2>&1; then
   [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. 앞으로 Dock/Launchpad 의 Dooray Skin 으로 실행하세요."
 else
