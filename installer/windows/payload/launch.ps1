@@ -51,7 +51,7 @@ if (-not ($running -and $portUp)) {
 $core = [IO.File]::ReadAllText((Join-Path $data 'core.js'), [Text.Encoding]::UTF8)
 $injectExpr = "window.__DRB_HOST='desktop';`n" + $core + "`n;'injected'"
 # 페이지의 설정(window.__drbSkin.config.global)에서 창 투명도, 다크 모드(제목 표시줄), 메뉴 바 숨기기를 읽는다
-$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, op: (g&&g.windowOpacity)||100, dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]'), upd: window.__drbUpdateRequest||null, alive: (window.__drbWatcherAlive=Date.now(), 1), toasts: (window.__drbToastQueue||[]).splice(0)}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
+$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, op: (window.__drbSkin&&window.__drbSkin.effectiveOpacity&&window.__drbSkin.effectiveOpacity())||(g&&g.windowOpacity)||100, dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]'), upd: window.__drbUpdateRequest||null, alive: (window.__drbWatcherAlive=Date.now(), 1), toasts: (window.__drbToastQueue||[]).splice(0)}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
 
 # 다크 모드 알림창: 페이지가 가로챈 알림(window.__drbToastQueue)을 toast-host.ps1 에 파일로 넘기고, 클릭 결과를 받아 그 대화방을 연다
 $toastIn = Join-Path $data 'toast\in'
