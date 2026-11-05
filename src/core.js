@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.6.0';
+  const VERSION = '0.6.1';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -94,6 +94,7 @@
       theme: { enabled: false, color: THEME_BASE },
       dark: { enabled: false, level: DARK_LEVEL_DEFAULT, titleBar: true, toast: true },
       hideMenu: false, // Windows 데스크톱: 상단 메뉴 바(파일·도구·보기…) 숨기기
+      sidebarOpacity: true, // 데스크톱: 사이드바 Dooray Skin 버튼 아래 창 투명도 슬라이더
     },
     rooms: {},
   });
@@ -121,6 +122,7 @@
           toast: c.global?.dark?.toast !== false,
         },
         hideMenu: !!c.global?.hideMenu,
+        sidebarOpacity: c.global?.sidebarOpacity !== false,
       },
       rooms: { ...rooms },
     };
@@ -749,8 +751,9 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   };
 
   // ---------------- sidebar button (#1) ----------------
+  // 사이드바 Dooray Skin 버튼 아이콘: 톱니(설정) + 반짝임(꾸미기). 톱니 경로는 Feather Icons(MIT) settings
   const ICON =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" fill="none"><rect x="3.6" y="4.6" width="16.8" height="14.8" rx="2.2" stroke="currentColor" stroke-width="1.2"/><circle cx="8.6" cy="9.4" r="1.7" stroke="currentColor" stroke-width="1.1"/><path d="M4.2 17.2l4.9-4.6 3.3 3 3.1-3.4 4.3 4.6" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="100%" height="100%" fill="none"><g transform="translate(10.2 10.2) scale(.56) translate(-12 -12)" stroke="currentColor" stroke-width="2.143" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g><path d="M18 13.6l.75 2.05 2.05.75-2.05.75L18 19.2l-.75-2.05-2.05-.75 2.05-.75z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const findBtn = (labels) => {
     for (const l of labels) {
       const b = document.querySelector(`button[aria-label="${l}"]`);
@@ -758,6 +761,92 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     }
     return null;
   };
+  // ---------------- 사이드바 투명도 슬라이더 (데스크톱) ----------------
+  // 오른쪽 사이드바 Dooray Skin 버튼 바로 아래에 세로 슬라이더 + %. 패널의 "두레이 창 투명도"와 같은 설정.
+  //  - 위로 끌면 진하게, 아래로 끌면 투명하게. 놓으면 저장 / 휠: 5%씩 / % 글자 클릭: 100% 와 직전 값 전환
+  //  - 패널에서 "Dooray Skin 버튼 아래에 표시"를 끄면 사라진다. 브라우저(웹 확장)에서는 창 투명도가 불가능해 표시하지 않는다
+  // 스타일 요소 id 는 drb- 로 시작해야 다크 모드 색 변환(buildSkin)에서 제외된다
+  const SBOP_CSS = `
+  [data-drb-sbop]{display:flex!important;flex-direction:column;align-items:center;gap:6px;padding:6px 0 4px;font-size:11px;line-height:1;user-select:none;box-sizing:border-box}
+  [data-drb-sbop] > input[type=range]{-webkit-appearance:none;appearance:none;writing-mode:vertical-lr;direction:rtl;width:4px;height:84px;margin:0;padding:0;border:0;outline:0;border-radius:2px;cursor:pointer;flex:none;
+    background:linear-gradient(0deg,var(--drb-sbop-acc) var(--drb-sbop-p),color-mix(in srgb,currentColor 25%,transparent) var(--drb-sbop-p))}
+  [data-drb-sbop] > input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.25),0 1px 3px rgba(0,0,0,.4)}
+  [data-drb-sbop] > span{cursor:pointer;font-variant-numeric:tabular-nums;opacity:.9;padding:2px 3px;border-radius:4px}
+  [data-drb-sbop] > span:hover{background:color-mix(in srgb,currentColor 12%,transparent)}`;
+  let sbopLast = 80; // % 글자 클릭으로 100% 에서 돌아갈 값
+  let sbopSaveTimer = 0;
+  const setWindowOpacityFromUi = (v, persist) => {
+    v = Math.max(30, Math.min(100, Math.round(v)));
+    if (v < 100) sbopLast = v;
+    config.global.windowOpacity = v;
+    syncSidebarOpacity();
+    applyWindowOpacity();
+    if (host) render();
+    clearTimeout(sbopSaveTimer);
+    if (persist) save();
+    else sbopSaveTimer = setTimeout(save, 400);
+  };
+  const syncSidebarOpacity = () => {
+    const el = document.querySelector('[data-drb-sbop]');
+    if (!el) return;
+    const v = Math.max(30, Math.min(100, Number(config.global.windowOpacity) || 100));
+    const input = el.querySelector('input');
+    if (input.value !== String(v)) input.value = String(v);
+    el.style.setProperty('--drb-sbop-p', ((v - 30) / 70) * 100 + '%');
+    el.style.setProperty('--drb-sbop-acc', config.global.theme.enabled && isHex6(config.global.theme.color) ? config.global.theme.color : '#2f8cff');
+    const span = el.querySelector('span');
+    span.textContent = v + '%';
+    span.title = v < 100 ? '눌러서 100%로 (다시 누르면 ' + v + '%)' : '눌러서 ' + sbopLast + '%로';
+  };
+  const ensureSidebarOpacity = () => {
+    const existing = document.querySelector('[data-drb-sbop]');
+    const item = document.querySelector('[data-drb-sidebar-item]');
+    if (!IS_DESKTOP || config.global.sidebarOpacity === false || !item) {
+      existing?.remove();
+      return;
+    }
+    if (!document.getElementById('drb-sbop-style')) {
+      const st = document.createElement('style');
+      st.id = 'drb-sbop-style';
+      st.textContent = SBOP_CSS;
+      document.head.appendChild(st);
+    }
+    // 사이드바 아이콘 색을 따른다(다크 모드 포함)
+    const ref = item.querySelector('svg') || item;
+    const color = getComputedStyle(ref).color;
+    if (existing && existing.previousElementSibling === item) {
+      if (existing.style.color !== color) existing.style.color = color;
+      syncSidebarOpacity();
+      return;
+    }
+    existing?.remove();
+    const el = document.createElement('div');
+    el.setAttribute('data-drb-sbop', '1');
+    el.title = '두레이 창 투명도 (Dooray Skin) · 휠로 5%씩';
+    el.style.color = color;
+    el.style.width = Math.round(item.getBoundingClientRect().width || 36) + 'px';
+    el.innerHTML = '<input type="range" min="30" max="100" step="1" aria-label="두레이 창 투명도"><span role="button"></span>';
+    const input = el.querySelector('input');
+    input.addEventListener('input', () => setWindowOpacityFromUi(Number(input.value), false));
+    input.addEventListener('change', () => setWindowOpacityFromUi(Number(input.value), true));
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        setWindowOpacityFromUi((Number(config.global.windowOpacity) || 100) + (e.deltaY < 0 ? 5 : -5), false);
+      },
+      { passive: false }
+    );
+    el.querySelector('span').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cur = Number(config.global.windowOpacity) || 100;
+      setWindowOpacityFromUi(cur < 100 ? 100 : sbopLast, true);
+    });
+    item.after(el);
+    syncSidebarOpacity();
+  };
+
   const ensureSidebarButton = () => {
     const existing = document.querySelector('[data-drb-sidebar-btn]');
     if (existing?.isConnected) {
@@ -981,6 +1070,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     <label class="t">두레이 창 투명도 <span data-v="windowOpacity"></span></label>
     <input type="range" min="30" max="100" data-g="windowOpacity">
     <p class="muted" data-ref="winNote"></p>
+    <label class="chk" style="margin-top:6px"><input type="checkbox" data-g="sidebarOpacity"> Dooray Skin 버튼 아래에도 표시</label>
     <label class="chk" data-ref="menuRow" style="margin-top:6px"><input type="checkbox" data-g="hideMenu"> 상단 메뉴 바(파일·도구·보기…) 숨기기</label>
   </div>
   <div class="tabs">
@@ -1129,6 +1219,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     $('[data-ref=winNote]').textContent = '창 전체가 반투명해져 뒤 화면이 비칩니다. (최소 30%, 모든 Dooray 창 공통)';
     $('[data-ref=menuRow]').hidden = !(IS_DESKTOP && IS_WIN); // 메뉴 바는 Windows 앱에만 있음 (macOS 는 시스템 메뉴)
     $('[data-g=hideMenu]').checked = !!config.global.hideMenu;
+    $('[data-g=sidebarOpacity]').checked = config.global.sidebarOpacity !== false;
 
     const dk = config.global.dark;
     $('[data-d=enabled]').checked = !!dk.enabled;
@@ -1295,7 +1386,12 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       else if (t.dataset.d === 'enabled') patchDark({ enabled: t.checked });
       else if (t.dataset.d === 'titleBar') patchDark({ titleBar: t.checked });
       else if (t.dataset.d === 'toast') patchDark({ toast: t.checked });
-      else if (t.dataset.g === 'hideMenu') {
+      else if (t.dataset.g === 'sidebarOpacity') {
+        config.global.sidebarOpacity = t.checked;
+        save();
+        render();
+        ensureSidebarOpacity();
+      } else if (t.dataset.g === 'hideMenu') {
         config.global.hideMenu = t.checked;
         save();
         render();
@@ -1329,6 +1425,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       if (scope && ['opacity', 'blur', 'veil'].includes(t.dataset.k)) patchBg(scope, { [t.dataset.k]: Number(t.value) });
       if (t.dataset.g === 'windowOpacity') {
         config.global.windowOpacity = Number(t.value);
+        syncSidebarOpacity();
         applyAll();
         save();
         render();
@@ -1435,6 +1532,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       render();
     }
     ensureSidebarButton();
+    ensureSidebarOpacity();
     installToastHook();
     applyWindowOpacity();
     if (loaded && !root.hasAttribute('data-drb-ready')) applyTheme();
