@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.6.1';
+  const VERSION = '0.7.0';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -59,6 +59,15 @@
   const DARK_LEVEL_DEFAULT = 11;
   const DARK_LEVEL_MIN = 4;
   const DARK_LEVEL_MAX = 22;
+  // 화면 잠금: 비밀번호는 PBKDF2-SHA256 해시만 저장. 자동 잠금 시간(분) 선택지, 0 = 끄기
+  const LOCK_ITER = 150000;
+  const LOCK_IDLE_CHOICES = [0, 1, 3, 5, 10, 15, 30, 60];
+  const LOCK_PW_MIN = 4;
+  const LOCK_MARK = 'drb-lock'; // localStorage { start, locked, bg }: 다음 문서가 시작하자마자(설정을 읽기 전에) 잠글지 판단
+  const LOCK_ALIVE = 'drb-lock-alive'; // localStorage: 잠금이 풀린 창이 2초마다 남기는 시각 (새 창·새로고침은 다시 묻지 않기 위함)
+  const LOCK_ALIVE_MS = 5000; // early.js 와 같은 값 유지
+  const LOCK_LIGHT_BG = '#eef1f5';
+  const freshLock = () => ({ hash: '', salt: '', iter: LOCK_ITER, onStart: true, idleMin: 5, maskToast: true });
 
   // ---------------- storage ----------------
   const idb = (() => {
@@ -95,12 +104,26 @@
       dark: { enabled: false, level: DARK_LEVEL_DEFAULT, titleBar: true, toast: true },
       hideMenu: false, // Windows 데스크톱: 상단 메뉴 바(파일·도구·보기…) 숨기기
       sidebarOpacity: true, // 데스크톱: 사이드바 Dooray Skin 버튼 아래 창 투명도 슬라이더
+      lock: freshLock(), // 화면 잠금 (hash 가 있으면 사용 중)
     },
     rooms: {},
   });
   let config = freshConfig();
   const bc = 'BroadcastChannel' in window ? new BroadcastChannel('dooray-skin') : null;
 
+  const normLock = (l) => {
+    const d = freshLock();
+    if (!l || typeof l !== 'object') return d;
+    const ok = /^[0-9a-f]{64}$/.test(l.hash || '') && /^[0-9a-f]{32}$/.test(l.salt || '');
+    return {
+      hash: ok ? l.hash : '',
+      salt: ok ? l.salt : '',
+      iter: Math.max(10000, Math.min(2000000, Number(l.iter) || LOCK_ITER)),
+      onStart: l.onStart !== false,
+      idleMin: LOCK_IDLE_CHOICES.includes(Number(l.idleMin)) ? Number(l.idleMin) : d.idleMin,
+      maskToast: l.maskToast !== false,
+    };
+  };
   const normalize = (c) => {
     const base = freshConfig();
     if (!c || typeof c !== 'object') return base;
@@ -123,6 +146,7 @@
         },
         hideMenu: !!c.global?.hideMenu,
         sidebarOpacity: c.global?.sidebarOpacity !== false,
+        lock: normLock(c.global?.lock),
       },
       rooms: { ...rooms },
     };
@@ -147,11 +171,18 @@
       }
     }, 200);
   };
+  // 잠금 설정처럼 다른 창이 곧바로 알아야 하는 변경은 미루지 않고 저장한다
+  const saveNow = async () => {
+    clearTimeout(saveTimer);
+    await idb.set('config', config);
+    bc?.postMessage({ type: 'changed' });
+  };
   bc?.addEventListener('message', async (e) => {
-    if (e.data?.type !== 'changed') return;
+    if (e.data?.type !== 'changed') return onLockMessage(e.data);
     await load();
     applyAll();
     render();
+    syncLock();
   });
 
   // ---------------- channel detection ----------------
@@ -999,7 +1030,7 @@ h1{font-size:14px;margin:0 0 8px;display:flex;justify-content:space-between;alig
 label.t{display:block;font-weight:600;margin-bottom:4px}
 input[type=range]{width:100%}
 input[type=range],input[type=checkbox]{accent-color:var(--accent)}
-input[type=text],select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;font:inherit;background:var(--inp);color:var(--fg)}
+input[type=text],input[type=password],select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;font:inherit;background:var(--inp);color:var(--fg)}
 .btns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .nowrap{flex-wrap:nowrap}
 button{font:inherit;white-space:nowrap;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--btn);cursor:pointer;color:var(--fg)}
@@ -1077,7 +1108,27 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     <button data-tab="room">이 방</button>
     <button data-tab="global">전체(Global)</button>
     <button data-tab="theme">테마</button>
+    <button data-tab="lock">잠금</button>
   </div>
+  <section data-pane="lock" hidden>
+    <p class="muted" data-ref="lockState"></p>
+    <div data-ref="lockOpts">
+      <div class="row btns"><button class="primary" data-act="lockNow">지금 잠그기</button><span class="muted">단축키 Alt+Shift+L</span></div>
+      <label class="chk"><input type="checkbox" data-l="onStart"> Dooray 를 켤 때 잠그기</label>
+      <div class="row">
+        <label class="t">자동 잠금 (Dooray 를 쓰지 않은 시간)</label>
+        <select data-l="idleMin">${LOCK_IDLE_CHOICES.map((m) => `<option value="${m}">${m ? m + '분' : '끄기'}</option>`).join('')}</select>
+      </div>
+      <label class="chk" data-ref="maskRow"><input type="checkbox" data-l="maskToast"> 잠긴 동안 새 메시지 알림창에 내용 숨기기 (Windows 앱)</label>
+      <hr>
+    </div>
+    <label class="t" data-ref="pwTitle"></label>
+    <div class="row" data-ref="curRow"><input type="password" data-l="cur" placeholder="현재 비밀번호" autocomplete="off"></div>
+    <div class="row"><input type="password" data-l="pw1" placeholder="새 비밀번호 (${LOCK_PW_MIN}자 이상)" autocomplete="off"></div>
+    <div class="row"><input type="password" data-l="pw2" placeholder="새 비밀번호 확인" autocomplete="off"></div>
+    <div class="btns"><button class="primary" data-act="lockSave"></button><button class="danger" data-act="lockOff">잠금 끄기</button></div>
+    <p class="muted">자리를 비운 사이 화면을 가리는 용도입니다. Dooray 계정 비밀번호와는 관계가 없고, Dooray Skin 없이 Dooray 를 실행하면 잠기지 않습니다. 비밀번호를 잊으면 잠금 화면에서 Dooray Skin 설정을 초기화해야 풀립니다.</p>
+  </section>
   <section data-pane="theme" hidden>
     <div class="row win">
       <label class="chk"><input type="checkbox" data-d="enabled"> <b>다크 모드</b></label>
@@ -1233,6 +1284,19 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     $('[data-v=darkLevel]').textContent = `${dk.level}%`;
     $('[data-ref=p]').classList.toggle('dark', !!dk.enabled);
 
+    const lk = config.global.lock;
+    const lkOn = lockOn();
+    $('[data-ref=lockState]').textContent = lkOn ? '잠금을 사용 중입니다.' : '비밀번호를 정하면 화면 잠금을 쓸 수 있습니다.';
+    $('[data-ref=lockOpts]').hidden = !lkOn;
+    $('[data-l=onStart]').checked = lk.onStart !== false;
+    $('[data-l=idleMin]').value = String(lk.idleMin);
+    $('[data-ref=maskRow]').hidden = !(IS_DESKTOP && IS_WIN);
+    $('[data-l=maskToast]').checked = lk.maskToast !== false;
+    $('[data-ref=pwTitle]').textContent = lkOn ? '비밀번호 변경 / 잠금 끄기' : '비밀번호 설정';
+    $('[data-ref=curRow]').hidden = !lkOn;
+    $('[data-act=lockSave]').textContent = lkOn ? '비밀번호 변경' : '잠금 켜기';
+    $('[data-act=lockOff]').hidden = !lkOn;
+
     const th = config.global.theme;
     const base = detectThemeBase();
     $('[data-t=enabled]').checked = !!th.enabled;
@@ -1290,7 +1354,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
   };
 
   const openPanel = () => {
-    if (host) return;
+    if (host || locked) return;
     host = document.createElement('div');
     host.id = 'drb-panel-host';
     sr = host.attachShadow({ mode: 'open' });
@@ -1326,6 +1390,30 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
         render();
         return flash(update ? `새 버전 v${update.version} 이 있습니다.` : `최신 버전입니다 (v${VERSION}).`);
       }
+      if (act === 'lockNow') return lockNow();
+      if (act === 'lockSave' || act === 'lockOff') {
+        const fields = () => $$('[data-l=cur],[data-l=pw1],[data-l=pw2]');
+        const [cur, pw1, pw2] = fields().map((i) => i.value);
+        try {
+          if (act === 'lockSave') {
+            if (pw1.length < LOCK_PW_MIN) return flash(`새 비밀번호는 ${LOCK_PW_MIN}자 이상으로 정해 주세요.`);
+            if (pw1 !== pw2) return flash('새 비밀번호와 확인이 서로 다릅니다.');
+          }
+          const was = lockOn();
+          if (was && !(await checkPw(cur))) return flash('현재 비밀번호가 맞지 않습니다.');
+          if (act === 'lockOff') config.global.lock = { ...config.global.lock, hash: '', salt: '' };
+          else await setPw(pw1);
+          await saveNow();
+          fields().forEach((i) => (i.value = ''));
+          syncLock();
+          render();
+          positionPanel();
+          flash(act === 'lockOff' ? '잠금을 껐습니다.' : was ? '비밀번호를 바꿨습니다.' : '잠금을 켰습니다. Alt+Shift+L 로 바로 잠글 수 있습니다.');
+        } catch (err) {
+          flash(`잠금 설정을 저장하지 못했습니다: ${err.message}`);
+        }
+        return;
+      }
       if (act === 'eyedrop') {
         if (!('EyeDropper' in window)) return flash('이 환경은 스포이드를 지원하지 않습니다.');
         try {
@@ -1356,7 +1444,8 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
         flash('이 방 설정을 삭제했습니다.');
       }
       if (act === 'export') {
-        const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+        // 잠금 설정(비밀번호 해시)은 내보내지 않는다 (팀원과 공유하는 파일)
+        const blob = new Blob([JSON.stringify({ ...config, global: { ...config.global, lock: undefined } }, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = `dooray-skin-${new Date().toISOString().slice(0, 10)}.json`;
@@ -1397,6 +1486,9 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
         render();
         flash(t.checked ? '감시자가 1~2초 안에 메뉴 바를 숨깁니다.' : '메뉴 바를 다시 표시합니다.');
       }
+      else if (t.dataset.l === 'onStart') patchLock({ onStart: t.checked });
+      else if (t.dataset.l === 'idleMin') patchLock({ idleMin: Number(t.value) });
+      else if (t.dataset.l === 'maskToast') patchLock({ maskToast: t.checked });
       else if (t.dataset.t === 'enabled') patchTheme({ enabled: t.checked });
       else if (t.dataset.t === 'hex') {
         const v = t.value.trim().replace(/^([0-9a-f]{6})$/i, '#$1').toLowerCase();
@@ -1408,7 +1500,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
         if (!f) return;
         try {
           const inc = normalize(JSON.parse(await f.text()));
-          config = { ...config, global: inc.global, rooms: { ...config.rooms, ...inc.rooms } };
+          config = { ...config, global: { ...inc.global, lock: config.global.lock }, rooms: { ...config.rooms, ...inc.rooms } };
           applyAll();
           save();
           render();
@@ -1480,6 +1572,16 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     const orig = wv.postMessage;
     const hooked = function (msg, ...rest) {
       try {
+        // 잠긴 동안에는 알림창에 메시지 내용을 보이지 않는다 (원래 알림창·어두운 알림창 공통)
+        if (locked && config.global.lock.maskToast !== false && typeof msg === 'string' && msg.includes('application:notification')) {
+          const m = JSON.parse(msg);
+          if (m && m.type === 'application:notification' && m.contents) {
+            m.contents = { ...m.contents, body: '새 메시지' };
+            msg = JSON.stringify(m);
+          }
+        }
+      } catch {}
+      try {
         const dk = config.global.dark;
         const alive = Date.now() - (window.__drbWatcherAlive || 0) < 6000;
         if (dk.enabled && dk.toast !== false && alive && typeof msg === 'string' && msg.includes('application:notification')) {
@@ -1520,6 +1622,340 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     return 'unsupported';
   };
 
+  // ---------------- lock (화면 잠금) ----------------
+  // 비밀번호를 넣기 전까지 Dooray 화면 전체를 가린다. 자리를 비운 사이 옆 사람이 못 보게 하는 가림막이며 보안 경계는 아니다
+  // (개발자 도구, Dooray Skin 없이 실행한 Dooray 로는 볼 수 있다).
+  //  - 잠기는 때: Dooray 를 켤 때 / 일정 시간 Dooray 를 쓰지 않았을 때 / Alt+Shift+L · 패널의 [지금 잠그기]
+  //  - 가리는 방법: <html> 바로 아래 잠금 화면(닫힌 Shadow DOM) + html[data-drb-locked] body{visibility:hidden}
+  //    (가려진 요소는 포커스도 받지 못해 키보드로도 조작할 수 없다)
+  //  - 같은 출처의 모든 창·탭이 BroadcastChannel 로 함께 잠기고 풀린다
+  //  - 새로고침해도 유지: localStorage LOCK_MARK 를 보고 설정(IndexedDB)을 읽기 전에 먼저 잠근다. 그보다 앞 구간은 early.js 덮개
+  //  - 비밀번호를 잊으면 잠금 화면에서 Dooray Skin 설정 전체를 지워야 풀린다
+  let locked = false;
+  let startLock = false; // 켤 때 잠금으로 잠긴 상태 (이미 풀려 있는 다른 창이 있으면 따라서 푼다)
+  let lockHost = null;
+  let lockUi = null;
+  let lockBusy = false;
+  let lockFails = 0;
+  let lockUntil = 0;
+  let lastActive = Date.now();
+  let lastActiveSent = 0;
+  let idleTimer = 0;
+  let loadedDone;
+  const whenLoaded = new Promise((r) => (loadedDone = r));
+  const lockOn = () => !!(config.global.lock.hash && config.global.lock.salt);
+  const hexOf = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const derive = async (pw, salt, iter) => {
+    if (!window.crypto?.subtle) throw new Error('이 화면에서는 암호화 기능을 쓸 수 없습니다');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(pw).normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', hash: 'SHA-256', salt: new Uint8Array(salt.match(/../g).map((h) => parseInt(h, 16))), iterations: iter },
+      key,
+      256,
+    );
+    return hexOf(bits);
+  };
+  const checkPw = async (pw) => {
+    const l = config.global.lock;
+    return lockOn() && (await derive(pw, l.salt, l.iter)) === l.hash;
+  };
+  const setPw = async (pw) => {
+    const salt = hexOf(crypto.getRandomValues(new Uint8Array(16)));
+    const hash = await derive(pw, salt, LOCK_ITER);
+    config.global.lock = { ...config.global.lock, hash, salt, iter: LOCK_ITER };
+  };
+  const readLockMark = () => {
+    try {
+      const m = JSON.parse(localStorage.getItem(LOCK_MARK) || 'null');
+      return m && typeof m === 'object' ? m : null;
+    } catch {
+      return null;
+    }
+  };
+  const aliveFresh = () => {
+    try {
+      return Date.now() - Number(localStorage.getItem(LOCK_ALIVE) || 0) < LOCK_ALIVE_MS;
+    } catch {
+      return false;
+    }
+  };
+  const lockBg = () => (loaded ? (config.global.dark.enabled ? darkBgHex() : LOCK_LIGHT_BG) : isHex6(readLockMark()?.bg) ? readLockMark().bg : LOCK_LIGHT_BG);
+  const syncLockMark = () => {
+    if (!loaded) return;
+    try {
+      if (!lockOn()) {
+        localStorage.removeItem(LOCK_MARK);
+        localStorage.removeItem(LOCK_ALIVE);
+        return;
+      }
+      const v = JSON.stringify({ start: config.global.lock.onStart !== false, locked, bg: lockBg() });
+      if (localStorage.getItem(LOCK_MARK) !== v) localStorage.setItem(LOCK_MARK, v);
+    } catch {}
+  };
+  const beat = () => {
+    if (!loaded || locked || !lockOn()) return;
+    try {
+      localStorage.setItem(LOCK_ALIVE, String(Date.now()));
+    } catch {}
+  };
+
+  const LOCK_CSS = `
+:host{all:initial}
+.w{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:24px;overflow:auto;
+ --bg:#eef1f5;--fg:#1f2328;--mut:#667085;--bd:#c9ced6;--inp:#fff;--accent:#2f6fed;color-scheme:light;
+ background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.w.dark{--fg:#e6e6e6;--mut:#9aa0a6;--bd:#4a4d50;--inp:rgba(255,255,255,.06);color-scheme:dark}
+.c{width:100%;max-width:300px;text-align:center}
+svg{width:40px;height:40px;color:var(--accent)}
+h2{font-size:18px;font-weight:600;margin:10px 0 2px}
+p{margin:0}
+.d{color:var(--mut);font-size:13px;margin-bottom:18px}
+input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--bd);border-radius:8px;font:inherit;background:var(--inp);color:var(--fg);outline:none;text-align:center}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+button{font:inherit;cursor:pointer}
+button:disabled{opacity:.6;cursor:default}
+.u{width:100%;margin-top:10px;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+.e{min-height:20px;margin-top:10px;color:#e5484d;font-size:13px}
+.f{border:0;background:none;color:var(--mut);font-size:12px;text-decoration:underline;margin-top:10px;padding:4px}
+.r{margin-top:10px;padding:12px;border:1px solid var(--bd);border-radius:8px;text-align:left;font-size:12px;color:var(--mut)}
+.r div{display:flex;gap:6px;margin-top:8px}
+.r input{text-align:left;padding:6px 8px;min-width:0}
+.r button{flex:none;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:none;color:#e5484d;white-space:nowrap}
+.shake{animation:sh .3s}
+@keyframes sh{25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+@media (prefers-reduced-motion:reduce){.shake{animation:none}}
+[hidden]{display:none!important}`;
+  const LOCK_HTML = `
+<style>${LOCK_CSS}</style>
+<div class="w"><div class="c">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  <h2>Dooray 가 잠겨 있습니다</h2>
+  <p class="d">Dooray Skin 잠금 비밀번호를 입력해 주세요.</p>
+  <input class="pw" type="password" placeholder="비밀번호" aria-label="잠금 비밀번호" autocomplete="off" spellcheck="false">
+  <button class="u" type="button">잠금 풀기</button>
+  <p class="e" role="alert"></p>
+  <button class="f" type="button">비밀번호를 잊었어요</button>
+  <div class="r" hidden>
+    <p>Dooray Skin 설정(배경, 테마, 잠금)을 모두 지우면 잠금이 풀립니다. Dooray 대화와 계정에는 영향이 없습니다. 계속하려면 아래에 <b>초기화</b> 라고 입력해 주세요.</p>
+    <div><input class="rc" type="text" placeholder="초기화" aria-label="초기화 확인" autocomplete="off"><button class="rb" type="button">설정 지우고 풀기</button></div>
+  </div>
+</div></div>`;
+  const lockErr = (t) => {
+    if (lockUi) lockUi.err.textContent = t || '';
+  };
+  const paintLock = () => {
+    if (!lockUi) return;
+    const bg = lockBg();
+    const c = parseColor(bg) || [238, 241, 245, 1];
+    const th = config.global.theme;
+    lockUi.wrap.classList.toggle('dark', (c[0] * 299 + c[1] * 587 + c[2] * 114) / 1000 < 128);
+    lockUi.wrap.style.setProperty('--bg', bg);
+    lockUi.wrap.style.setProperty('--accent', th.enabled && isHex6(th.color) ? th.color : '#2f6fed');
+  };
+  const buildLock = () => {
+    lockHost = document.createElement('div');
+    lockHost.id = 'drb-lock-host';
+    const s = lockHost.attachShadow({ mode: 'closed' });
+    s.innerHTML = LOCK_HTML;
+    const q = (sel) => s.querySelector(sel);
+    lockUi = { wrap: q('.w'), card: q('.c'), input: q('.pw'), btn: q('.u'), err: q('.e'), reset: q('.r'), resetInput: q('.rc') };
+    lockUi.btn.addEventListener('click', tryUnlock);
+    lockUi.input.addEventListener('keydown', (e) => e.key === 'Enter' && tryUnlock());
+    q('.f').addEventListener('click', () => {
+      lockUi.reset.hidden = !lockUi.reset.hidden;
+      if (!lockUi.reset.hidden) lockUi.resetInput.focus();
+    });
+    q('.rb').addEventListener('click', resetFromLock);
+    lockUi.resetInput.addEventListener('keydown', (e) => e.key === 'Enter' && resetFromLock());
+    // 잠금 화면에서 누른 키·클릭이 Dooray 의 문서 단위 단축키·처리기로 넘어가지 않게 한다
+    for (const t of ['keydown', 'keyup', 'keypress', 'pointerdown', 'mousedown', 'click', 'contextmenu', 'wheel'])
+      lockHost.addEventListener(t, (e) => e.stopPropagation());
+  };
+  const showLock = () => {
+    locked = true;
+    closePanel();
+    if (!document.getElementById('drb-lock-style')) {
+      const st = document.createElement('style');
+      st.id = 'drb-lock-style'; // drb- 로 시작해야 테마·다크 복제에서 제외된다
+      st.textContent = 'html[data-drb-locked] body{visibility:hidden!important}';
+      (document.head || root).appendChild(st);
+    }
+    root.setAttribute('data-drb-locked', '');
+    root.setAttribute('data-drb-ready', ''); // 다크 모드 시작 덮개가 잠금 화면을 가리지 않게 바로 걷는다
+    if (!lockHost) buildLock();
+    if (!lockHost.isConnected) root.appendChild(lockHost);
+    paintLock();
+    clearTimeout(idleTimer);
+    syncLockMark();
+    if (document.hasFocus()) lockUi.input.focus();
+  };
+  const hideLock = () => {
+    locked = false;
+    startLock = false;
+    root.removeAttribute('data-drb-locked');
+    lockHost?.remove();
+    if (lockUi) {
+      lockUi.input.value = '';
+      lockUi.resetInput.value = '';
+      lockUi.reset.hidden = true;
+      lockErr('');
+    }
+    lastActive = Date.now();
+    syncLockMark();
+    beat();
+    armIdle();
+  };
+  const lockNow = () => {
+    if (!loaded || !lockOn()) return false;
+    startLock = false;
+    showLock();
+    bc?.postMessage({ type: 'lock' });
+    return true;
+  };
+  const tryUnlock = async () => {
+    if (lockBusy || !lockUi) return;
+    const wait = lockUntil - Date.now();
+    if (wait > 0) return lockErr(`${Math.ceil(wait / 1000)}초 뒤에 다시 시도해 주세요.`);
+    const pw = lockUi.input.value;
+    if (!pw) return lockUi.input.focus();
+    lockBusy = true;
+    lockUi.btn.disabled = true;
+    try {
+      await whenLoaded;
+      if (!lockOn() || (await checkPw(pw))) {
+        lockFails = 0;
+        hideLock();
+        bc?.postMessage({ type: 'unlock' });
+      } else {
+        lockUi.input.value = '';
+        lockUi.card.classList.remove('shake');
+        void lockUi.card.offsetWidth;
+        lockUi.card.classList.add('shake');
+        if (++lockFails >= 5) {
+          lockFails = 0;
+          lockUntil = Date.now() + 30000;
+          lockErr('5번 틀렸습니다. 30초 뒤에 다시 시도해 주세요.');
+        } else lockErr('비밀번호가 맞지 않습니다.');
+        lockUi.input.focus();
+      }
+    } catch (e) {
+      lockErr(`확인하지 못했습니다: ${e.message}`);
+    } finally {
+      lockBusy = false;
+      if (lockUi) lockUi.btn.disabled = false;
+    }
+  };
+  // 비밀번호를 잊었을 때: Dooray Skin 설정 전체(배경·테마·잠금)를 지우고 푼다
+  const resetFromLock = async () => {
+    if (!lockUi || lockBusy) return;
+    if (lockUi.resetInput.value.trim() !== '초기화') return lockErr('"초기화" 라고 입력해야 진행됩니다.');
+    lockBusy = true;
+    try {
+      await whenLoaded;
+      config = freshConfig();
+      await saveNow();
+      hideLock();
+      applyAll();
+      syncSidebarOpacity();
+      render();
+    } catch (e) {
+      lockErr(`초기화하지 못했습니다: ${e.message}`);
+    } finally {
+      lockBusy = false;
+    }
+  };
+  const patchLock = (patch) => {
+    config.global.lock = { ...config.global.lock, ...patch };
+    syncLock();
+    save();
+    render();
+  };
+
+  // 자동 잠금: 마지막으로 Dooray 를 만진 뒤 idleMin 분. 어느 창에서 만지든 다른 창에도 알린다(5초에 한 번)
+  const idleMs = () => (lockOn() ? (Number(config.global.lock.idleMin) || 0) * 60000 : 0);
+  const checkIdle = () => {
+    const ms = idleMs();
+    if (!ms || locked || !loaded) return;
+    if (Date.now() - lastActive >= ms) lockNow();
+    else armIdle();
+  };
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    const ms = idleMs();
+    if (!ms || locked || !loaded) return;
+    idleTimer = setTimeout(checkIdle, Math.max(1000, lastActive + ms - Date.now()));
+  };
+  const onActivity = () => {
+    if (locked) return;
+    const now = Date.now();
+    lastActive = now;
+    if (now - lastActiveSent > 5000 && idleMs()) {
+      lastActiveSent = now;
+      bc?.postMessage({ type: 'active' });
+    }
+  };
+  // 설정이 바뀐 뒤(이 창·다른 창) 잠금 상태를 다시 맞춘다
+  const syncLock = () => {
+    if (!loaded) return;
+    if (locked && !lockOn()) hideLock();
+    syncLockMark();
+    beat();
+    armIdle();
+    paintLock();
+  };
+  const onLockMessage = async (d) => {
+    const t = d?.type;
+    if (t === 'active') lastActive = Date.now();
+    else if (t === 'lock') {
+      await whenLoaded;
+      if (!lockOn()) await load(); // 방금 다른 창에서 잠금을 켠 직후일 수 있다
+      if (lockOn()) {
+        startLock = false;
+        showLock();
+      }
+    } else if (t === 'unlock') {
+      if (locked) hideLock();
+    } else if (t === 'lock-query') {
+      if (loaded && lockOn() && !locked) bc?.postMessage({ type: 'lock-state', locked: false });
+    } else if (t === 'lock-state') {
+      if (locked && startLock && d.locked === false) hideLock();
+    }
+  };
+  // 시작할 때: 잠긴 채로 끝났거나(새로고침 포함), "켤 때 잠그기"인데 풀려 있는 다른 창이 없으면 잠근다.
+  // core.js 가 실행되자마자 localStorage 표식만 보고 먼저 잠그고(preLock), 설정을 읽은 뒤 확정한다(initLock).
+  const startFresh = aliveFresh();
+  const preLock = () => {
+    const m = readLockMark();
+    if (m && (m.locked || (m.start && !startFresh))) showLock();
+    root.setAttribute('data-drb-lock-ok', ''); // early.js 잠금 덮개를 걷는다 (잠글 거면 이미 잠금 화면이 떠 있다)
+  };
+  const initLock = () => {
+    const m = readLockMark();
+    if (!lockOn()) {
+      if (locked) hideLock();
+    } else if (m?.locked) showLock();
+    else if (config.global.lock.onStart !== false && !startFresh) {
+      startLock = true;
+      showLock();
+      bc?.postMessage({ type: 'lock-query' }); // 타이머가 느려진(가려진) 다른 창이 풀려 있으면 답이 온다
+    } else if (locked) hideLock();
+    syncLock();
+  };
+  // 잠금 화면이나 표식이 지워지면 되돌린다
+  new MutationObserver(() => {
+    if (!locked || !lockHost) return;
+    if (!lockHost.isConnected) root.appendChild(lockHost);
+    if (!root.hasAttribute('data-drb-locked')) root.setAttribute('data-drb-locked', '');
+  }).observe(root, { childList: true, attributes: true, attributeFilter: ['data-drb-locked'] });
+  for (const t of ['pointerdown', 'pointermove', 'keydown', 'wheel']) window.addEventListener(t, onActivity, { capture: true, passive: true });
+  const onReturn = () => {
+    checkIdle(); // 가려진 동안 타이머가 늦어졌을 수 있으니 돌아오는 순간 바로 확인
+    if (locked && lockUi && document.hasFocus()) lockUi.input.focus();
+  };
+  window.addEventListener('focus', onReturn);
+  document.addEventListener('visibilitychange', () => !document.hidden && onReturn());
+  setInterval(beat, 2000);
+
   // ---------------- wiring ----------------
   let timer = 0;
   const tick = () => {
@@ -1542,6 +1978,11 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
   }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
   window.addEventListener('keydown', (e) => {
+    if (locked) return;
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyL' && lockOn()) {
+      e.preventDefault();
+      return void lockNow();
+    }
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyB') {
       e.preventDefault();
       togglePanel();
@@ -1575,12 +2016,17 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     showChannel,
     effectiveOpacity,
     get toastHook() { return toastHookState; },
+    lock: () => lockNow(),
+    get locked() { return locked; },
     checkUpdate: () => checkUpdate(true),
     updateFailed,
   };
 
+  preLock();
   load().then(() => {
     loaded = true;
+    loadedDone();
+    initLock();
     tick();
     applyAll();
     checkUpdate();
