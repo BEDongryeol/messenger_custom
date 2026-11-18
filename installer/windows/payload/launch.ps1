@@ -54,7 +54,9 @@ $injectExpr = "window.__DRB_HOST='desktop';`n" + $core + "`n;'injected'"
 $earlyPath = Join-Path $data 'early.js'
 $earlySrc = if (Test-Path $earlyPath) { [IO.File]::ReadAllText($earlyPath, [Text.Encoding]::UTF8) } else { $null }
 # 페이지 상태: 창 투명도(op, 설정값), 창 안 이미지 보기 열림(vw), 다크 모드(제목 표시줄), 메뉴 바 숨기기, 업데이트 요청, 알림창 대기열
-$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, rs: document.readyState, op: (g&&g.windowOpacity)||100, vw: !!(window.__drbSkin&&window.__drbSkin.effectiveOpacity&&window.__drbSkin.effectiveOpacity()===100), dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]'), upd: window.__drbUpdateRequest||null, alive: (window.__drbWatcherAlive=Date.now(), 1), toasts: (window.__drbToastQueue||[]).splice(0)}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
+# 확인할 때마다 시스템 무입력 시간(초)을 __DRB_IDLE__ 자리에 넣어 페이지에 알려 준다 (화면 잠금의 자동 잠금, Get-DrbCheckExpr)
+$checkExpr = "JSON.stringify((g=>({core: !!window.__drbCore, idle: (window.__drbSkin&&window.__drbSkin.sysIdle&&window.__drbSkin.sysIdle(__DRB_IDLE__), 1), rs: document.readyState, op: (g&&g.windowOpacity)||100, vw: !!(window.__drbSkin&&window.__drbSkin.effectiveOpacity&&window.__drbSkin.effectiveOpacity()===100), dark: !!(g&&g.dark&&g.dark.enabled&&g.dark.titleBar!==false), level: (g&&g.dark&&g.dark.level)||11, hideMenu: !!(g&&g.hideMenu), btn: !!document.querySelector('[data-drb-sidebar-btn]'), upd: window.__drbUpdateRequest||null, alive: (window.__drbWatcherAlive=Date.now(), 1), toasts: (window.__drbToastQueue||[]).splice(0)}))(window.__drbSkin&&window.__drbSkin.config&&window.__drbSkin.config.global))"
+function Get-DrbCheckExpr { return $checkExpr.Replace('__DRB_IDLE__', [string](Get-DrbIdleSeconds)) }
 $doorayRe = '^https://([a-z0-9-]+\.)*dooray\.com/'
 # 투명도는 대화 창(메신저 화면, 따로 띄운 채팅 창)에만. 나머지(이미지·파일·메일 미리보기, 작성 창 등)는 불투명.
 $chatRe = '^https://[^/]+/messenger/?([?#]|$)|^https://[^/]+/messenger/(popup|channels)/\d+(/threads/\d+)?/?([?#]|$)'
@@ -306,7 +308,7 @@ function Invoke-DrbEventLoop([int]$port) {
       foreach ($tid in @($tg.Keys)) {
         $t = $tg[$tid]
         if ($t.sid -and $t.url -match $doorayRe -and $now -ge $t.due) {
-          Send-DrbCdp $c 'Runtime.evaluate' @{ expression = $checkExpr; returnByValue = $true } $t.sid @{ k = 'check'; tid = $tid } | Out-Null
+          Send-DrbCdp $c 'Runtime.evaluate' @{ expression = (Get-DrbCheckExpr); returnByValue = $true } $t.sid @{ k = 'check'; tid = $tid } | Out-Null
           $t.due = $now + $every
         }
       }
@@ -357,7 +359,7 @@ function Invoke-DrbPollLoop([int]$port) {
     foreach ($t in @($targets)) {
       if ($t.type -ne 'page' -or $t.url -notmatch $doorayRe -or -not $t.webSocketDebuggerUrl) { continue }
       $vw = $false
-      $r = Invoke-DrbEvaluate $t.webSocketDebuggerUrl @($checkExpr)
+      $r = Invoke-DrbEvaluate $t.webSocketDebuggerUrl @((Get-DrbCheckExpr))
       if ($r -and $r[0]) {
         $state = $r[0] | ConvertFrom-Json
         if (-not $state.core) {

@@ -212,7 +212,20 @@ public static int SetAlphaForPid(uint pid, byte alpha) {
   }, System.IntPtr.Zero);
   return n;
 }
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+// 컴퓨터 전체에서 마지막 키보드·마우스 입력 뒤 지난 시간(초). 실패하면 -1
+public static int IdleSeconds() {
+  LASTINPUTINFO i = new LASTINPUTINFO();
+  i.cbSize = 8;
+  if (!GetLastInputInfo(ref i)) return -1;
+  return (int)(unchecked((uint)System.Environment.TickCount - i.dwTime) / 1000);
+}
 '@
+}
+# 화면 잠금의 자동 잠금용: 시스템 무입력 시간(초). 알 수 없으면 -1 (core.js 가 무시하고 화면 기준으로 센다)
+function Get-DrbIdleSeconds {
+  try { Initialize-DrbWin32; return [int][DRB.Win]::IdleSeconds() } catch { return -1 }
 }
 
 function Set-DrbOpacity([int]$percent, [string[]]$exclude = @()) {

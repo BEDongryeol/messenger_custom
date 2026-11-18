@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.7.0';
+  const VERSION = '0.7.1';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -1116,7 +1116,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       <div class="row btns"><button class="primary" data-act="lockNow">지금 잠그기</button><span class="muted">단축키 Alt+Shift+L</span></div>
       <label class="chk"><input type="checkbox" data-l="onStart"> Dooray 를 켤 때 잠그기</label>
       <div class="row">
-        <label class="t">자동 잠금 (Dooray 를 쓰지 않은 시간)</label>
+        <label class="t">자동 잠금 (${IS_DESKTOP ? '컴퓨터를 쓰지 않은 시간' : 'Dooray 를 쓰지 않은 시간'})</label>
         <select data-l="idleMin">${LOCK_IDLE_CHOICES.map((m) => `<option value="${m}">${m ? m + '분' : '끄기'}</option>`).join('')}</select>
       </div>
       <label class="chk" data-ref="maskRow"><input type="checkbox" data-l="maskToast"> 잠긴 동안 새 메시지 알림창에 내용 숨기기 (Windows 앱)</label>
@@ -1801,6 +1801,8 @@ button:disabled{opacity:.6;cursor:default}
       lockErr('');
     }
     lastActive = Date.now();
+    hostIdle = null; // 풀기 직전의 긴 무입력 값으로 곧바로 다시 잠기지 않게 다음 보고를 기다린다
+    hostWasFresh = false;
     syncLockMark();
     beat();
     armIdle();
@@ -1871,24 +1873,45 @@ button:disabled{opacity:.6;cursor:default}
     render();
   };
 
-  // 자동 잠금: 마지막으로 Dooray 를 만진 뒤 idleMin 분. 어느 창에서 만지든 다른 창에도 알린다(5초에 한 번)
+  // 자동 잠금: 컴퓨터 전체에서 키보드·마우스 입력이 idleMin 분 동안 없을 때 (Dooray 의 자동 자리비움과 같은 기준).
+  //  데스크톱 앱: 호스트가 몇 초마다 __drbSkin.sysIdle(초) 로 시스템 무입력 시간을 알려 준다
+  //   - Windows: 감시자(launch.ps1)가 GetLastInputInfo 값을 상태 확인 때마다 전달 (Dooray 자동 자리비움도 이 API 를 쓴다)
+  //   - macOS: 메인 프로세스 훅이 powerMonitor.getSystemIdleTime() 을 전달
+  //  웹 확장, 또는 호스트 값이 끊겼을 때(HOST_IDLE_FRESH_MS 넘게 안 옴): Dooray 화면을 마지막으로 만진 시각 기준.
+  //   어느 창에서 만지든 다른 창에도 알린다(5초에 한 번)
+  const HOST_IDLE_FRESH_MS = 15000;
+  let hostIdle = null; // { ms: 시스템 무입력 시간, at: 받은 시각 }
+  let hostWasFresh = false;
+  const hostFresh = () => !!hostIdle && Date.now() - hostIdle.at < HOST_IDLE_FRESH_MS;
   const idleMs = () => (lockOn() ? (Number(config.global.lock.idleMin) || 0) * 60000 : 0);
   const checkIdle = () => {
     const ms = idleMs();
     if (!ms || locked || !loaded) return;
-    if (Date.now() - lastActive >= ms) lockNow();
+    const fresh = hostFresh();
+    // 호스트 값이 끊겨 화면 기준으로 돌아가는 순간: 그동안 Dooray 를 안 만졌다고 바로 잠그지 않게 지금부터 센다
+    if (hostWasFresh && !fresh) lastActive = Date.now();
+    hostWasFresh = fresh;
+    if ((fresh ? hostIdle.ms : Date.now() - lastActive) >= ms) lockNow();
     else armIdle();
   };
   const armIdle = () => {
     clearTimeout(idleTimer);
     const ms = idleMs();
     if (!ms || locked || !loaded) return;
-    idleTimer = setTimeout(checkIdle, Math.max(1000, lastActive + ms - Date.now()));
+    // 호스트 값이 오는 동안은 값이 올 때마다 확인하므로, 타이머는 값이 끊겼는지만 본다
+    idleTimer = setTimeout(checkIdle, hostFresh() ? HOST_IDLE_FRESH_MS : Math.max(1000, lastActive + ms - Date.now()));
+  };
+  const sysIdle = (sec) => {
+    const s = Number(sec);
+    if (!(s >= 0)) return;
+    hostIdle = { ms: s * 1000, at: Date.now() };
+    checkIdle();
   };
   const onActivity = () => {
     if (locked) return;
     const now = Date.now();
     lastActive = now;
+    if (hostIdle) hostIdle.ms = 0; // 방금 입력이 있었으니 지난 보고값은 버린다
     if (now - lastActiveSent > 5000 && idleMs()) {
       lastActiveSent = now;
       bc?.postMessage({ type: 'active' });
@@ -2017,6 +2040,7 @@ button:disabled{opacity:.6;cursor:default}
     effectiveOpacity,
     get toastHook() { return toastHookState; },
     lock: () => lockNow(),
+    sysIdle,
     get locked() { return locked; },
     checkUpdate: () => checkUpdate(true),
     updateFailed,

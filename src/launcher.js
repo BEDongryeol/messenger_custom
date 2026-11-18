@@ -203,6 +203,13 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
         if (!w.isDestroyed() && isDooray(w.getURL())) w.executeJavaScript(js, true).catch(() => {});
       } catch {}
     });
+  // 화면 잠금의 자동 잠금: 컴퓨터 전체 무입력 시간(초)을 3초마다 Dooray 화면에 알려 준다 (core.js 의 __drbSkin.sysIdle)
+  setInterval(() => {
+    try {
+      const s = Number(req('electron').powerMonitor.getSystemIdleTime());
+      if (s >= 0) notifyPages(`window.__drbSkin && window.__drbSkin.sysIdle && window.__drbSkin.sysIdle(${Math.floor(s)})`);
+    } catch {}
+  }, 3000);
   const doUpdate = async (u) => {
     if (updating) return;
     updating = true;
