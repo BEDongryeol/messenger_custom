@@ -14,6 +14,7 @@ on:
       - 'chrome-extension/**'
       - 'build.sh'
       - 'build-windows.ps1'
+      - 'compat/**'   # Dooray 버전 호환성 표만 바뀌어도 Pages(compat.json)를 다시 올린다 (새 Skin 릴리스 없이)
   workflow_dispatch:
 
 permissions:
@@ -104,12 +105,14 @@ jobs:
 
   pages:
     needs: [check, release]
-    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    # 새 릴리스 때, 수동 실행 때, 그리고 "새 버전이 아닌 푸시"(compat.json 만 바뀐 경우 등)에도 Pages 를 다시 올린다
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch' || needs.check.outputs.release == 'false')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -130,6 +133,10 @@ jobs:
               'chrome': a.get('DooraySkin-chrome-extension.zip'),
           }
           json.dump(m, open('site/latest.json', 'w'), ensure_ascii=False, indent=2)
+          # Dooray 버전별 호환성 표: 형식이 깨진 파일이 올라가 Skin 이 오작동하지 않게 검증 후 게시
+          c = json.load(open('compat/dooray-compat.json', encoding='utf-8'))
+          assert c.get('schema') == 1 and isinstance(c.get('rules'), list), 'compat.json 형식 오류'
+          json.dump(c, open('site/compat.json', 'w'), ensure_ascii=False, indent=2)
           repo = os.environ['GITHUB_REPOSITORY']
           open('site/index.html', 'w').write(f'<meta http-equiv="refresh" content="0; url=https://github.com/{repo}/releases/latest">')
           print(json.dumps(m, ensure_ascii=False, indent=2))
