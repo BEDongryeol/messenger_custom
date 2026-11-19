@@ -73,6 +73,8 @@ case "$FUSES" in
   unknown) STRATEGY="node-hook" ;; # fuse 를 읽지 못하면(fuse 가 없던 구형 Electron) 예전 방식
   *) STRATEGY="cdp-port" ;;
 esac
+# 4.0.4+ 에서 사용자가 패널에서 "창 투명도 쓰기(복사본)"를 켰으면 복사본 모드
+[ "$STRATEGY" = "cdp-port" ] && [ -f "$DATA/host-mode.on" ] && STRATEGY="host-copy"
 log "Dooray $DOORAY_VER · fuses: $FUSES · strategy: $STRATEGY"
 printf '{"app":"%s","fuses":"%s","strategy":"%s","skin":"%s","at":"%s"}\n' "$DOORAY_VER" "$FUSES" "$STRATEGY" "$(grep -o "VERSION = '[0-9.]*'" "$RES/core.js" 2>/dev/null | grep -o "[0-9.]*")" "$(date -u +%FT%TZ)" > "$DATA/compat-state.json"
 
@@ -85,7 +87,7 @@ if [ "$STRATEGY" = "node-hook" ]; then
     exit 1
   fi
 else
-  # Dooray 4.0.4+: macOS 기본 Ruby(/usr/bin/ruby, 개발자 도구 불필요)로 디버그 포트 주입기 실행.
+  # Dooray 4.0.4+: macOS 기본 Ruby(/usr/bin/ruby, 개발자 도구 불필요)로 주입기 실행 (cdp: 디버그 포트 / host: 창 투명도용 복사본).
   # --disable-gems: 표준 라이브러리만 쓰므로 RubyGems 를 읽지 않는다(시작이 빠르고 /Library/Ruby 권한 문제가 없다)
   if ! /usr/bin/ruby --disable-gems -e 'require "socket"; require "json"; require "net/http"' >/dev/null 2>&1; then
     log "ruby 를 사용할 수 없어 Skin 없이 Dooray 만 실행"
@@ -93,7 +95,8 @@ else
     /usr/bin/open -a "$APP"
     exit 1
   fi
-  if /usr/bin/ruby --disable-gems "$RES/cdp-injector.rb" --app "$APP" --res "$RES" --data "$DATA" --app-version "$DOORAY_VER" >>"$LOG" 2>&1; then
+  MODE=cdp; [ "$STRATEGY" = "host-copy" ] && MODE=host
+  if /usr/bin/ruby --disable-gems "$RES/cdp-injector.rb" --mode "$MODE" --app "$APP" --res "$RES" --data "$DATA" --app-version "$DOORAY_VER" --skin-app "$TARGET" >>"$LOG" 2>&1; then
     [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. Dooray $DOORAY_VER 에서는 창 투명도를 쓸 수 없고 나머지 기능은 사용할 수 있습니다."
   else
     notify "Dooray $DOORAY_VER 에 Skin 을 연결하지 못했습니다. launcher.log 를 확인해 주세요."

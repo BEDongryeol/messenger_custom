@@ -4,15 +4,32 @@
   "readme": "Dooray 버전 조합별 Skin 상태표. 규칙은 위에서부터 처음 맞는 하나가 적용됩니다. 설명은 COMPAT.md 참고.",
   "rules": [
     {
+      "id": "mac-host-copy",
+      "platform": "mac",
+      "strategy": "host-copy",
+      "app": ">=4.0.4",
+      "skin": ">=0.8.2",
+      "status": "verified",
+      "note": "Dooray 복사본으로 실행 중 (창 투명도 사용 가능). Dooray 자체 업데이트는 원래 앱으로 다시 시작해 진행됩니다.",
+      "evidence": "2026-11-19: 사용자 실기기(Mac 4.0.4 + Skin 0.8.2 로컬 빌드)에서 창 투명도 반영 확인. 0.8.1 은 4.0.4 의 새 창 주소(dooray-messenger-file://)를 대화 창으로 인식하지 못해 투명도가 100% 로 고정됐음",
+      "verified": [
+        "4.0.4"
+      ]
+    },
+    {
       "id": "mac-4.0.4-plus",
       "platform": "mac",
       "app": ">=4.0.4",
       "skin": ">=0.8.0",
       "status": "limited",
       "strategy": "cdp-port",
-      "disable": ["windowOpacity", "sidebarOpacity", "darkTitleBar"],
-      "note": "Dooray 4.0.4 부터 앱 내부 접근이 막혀 창 투명도와 제목 표시줄 다크는 쓸 수 없습니다. 배경, 테마 색, 다크 모드, 잠금은 사용할 수 있습니다.",
-      "evidence": "2026-11-19: Electron fuse RunAsNode/EnableNodeCliInspectArguments 꺼짐 확인, 웹 화면 점검 8/8, 가짜 CDP 서버로 주입기 테스트. 실제 4.0.4 앱에서의 적용은 확인 전"
+      "disable": [
+        "windowOpacity",
+        "sidebarOpacity",
+        "darkTitleBar"
+      ],
+      "note": "Dooray 4.0.4 부터 앱 내부 접근이 막혀 창 투명도와 제목 표시줄 다크는 기본 방식으로 쓸 수 없습니다. 배경, 테마 색, 다크 모드, 잠금은 사용할 수 있고, 창 투명도는 위 '복사본으로 창 투명도 켜기'로 쓸 수 있습니다.",
+      "evidence": "2026-11-19: fuse 꺼짐 확인. 사용자 실기기(Mac 4.0.4 + Skin 0.8.0)에서 다크 모드·잠금 정상 확인"
     },
     {
       "id": "mac-pre-4.0.4",
@@ -20,7 +37,9 @@
       "app": "<4.0.4",
       "status": "verified",
       "strategy": "node-hook",
-      "verified": ["4.0.3"],
+      "verified": [
+        "4.0.3"
+      ],
       "note": ""
     },
     {
@@ -29,14 +48,35 @@
       "app": ">=2.2.0 <3",
       "status": "verified",
       "strategy": "webview2-port",
-      "verified": ["2.2.2"],
+      "verified": [
+        "2.2.2"
+      ],
       "note": ""
     }
   ],
   "webVerified": [
-    { "release": "01a1eddd-cda7-0000-bd20-eaba86cbeb00", "date": "2026-11-19", "skin": "0.8.0", "checks": "8/8" }
+    {
+      "release": "01a1eddd-cda7-0000-bd20-eaba86cbeb00",
+      "date": "2026-11-19",
+      "skin": "0.8.0",
+      "checks": "8/8"
+    }
   ],
   "history": [
-    { "date": "2026-11-19", "dooray": "mac 4.0.4", "event": "Dooray 자체 업데이트(ShipIt 09:16)로 Electron 보안 설정(RunAsNode, --inspect) 꺼짐 → 기존 Mac 주입 방식 불가. Skin 0.8.0 에서 Chromium 디버그 포트 방식으로 전환(창 투명도 제외)" }
+    {
+      "date": "2026-11-19",
+      "dooray": "mac 4.0.4",
+      "event": "Dooray 자체 업데이트(ShipIt 09:16)로 Electron 보안 설정(RunAsNode, --inspect) 꺼짐 → 기존 Mac 주입 방식 불가. Skin 0.8.0 에서 Chromium 디버그 포트 방식으로 전환(창 투명도 제외)"
+    },
+    {
+      "date": "2026-11-19",
+      "dooray": "mac 4.0.4",
+      "event": "Skin 0.8.0 디버그 포트 방식이 실기기에서 다크 모드·잠금 정상. 0.8.1 에서 창 투명도용 복사본 모드(선택) 추가"
+    },
+    {
+      "date": "2026-11-19",
+      "dooray": "mac 4.0.4",
+      "event": "복사본 모드에서 메인 창 주소가 dooray-messenger-file:// 로 바뀐 것을 반영(0.8.2). 실기기에서 창 투명도 확인"
+    }
   ]
 }

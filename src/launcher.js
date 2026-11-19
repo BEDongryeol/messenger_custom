@@ -118,7 +118,9 @@ function launchDooray(args = []) {
 }
 
 // ---------- main-process hook (Dooray 메인 프로세스 안에서 실행됨) ----------
-function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
+// @@MAIN_HOOK_BEGIN (Mac 4.0.4+ 복사본 모드에서 cdp-injector.rb 가 이 사이를 잘라 쓴다. 표시를 지우지 말 것)
+// OPTS(선택): { strategy: 'host-copy', data: <데이터 폴더>, originalApp: <원래 Dooray.app>, skinApp: <Dooray Skin.app> }
+function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE, OPTS) {
   if (global.__drbHooked) return JSON.stringify({ ok: true, already: true, pid: process.pid });
   global.__drbHooked = true;
   const req = typeof require === 'function' ? require : process.mainModule.require;
@@ -136,10 +138,12 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
   try {
     appVer = app.getVersion();
   } catch {}
+  const OPT = OPTS || {};
+  const HOST_COPY = OPT.strategy === 'host-copy';
   const DRB_ENV = JSON.stringify({
     platform: process.platform === 'win32' ? 'win' : 'mac',
     app: appVer,
-    strategy: 'node-hook',
+    strategy: HOST_COPY ? 'host-copy' : 'node-hook',
     caps: { windowOpacity: true, darkTitleBar: true, autoUpdate: true },
   });
   hlog('dooray app version', appVer, 'electron', process.versions.electron);
@@ -175,7 +179,8 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
   // 투명도는 대화 창(앱 메인 창 = file:// 셸, 메신저 화면, 따로 띄운 채팅 창)에만 적용.
   // 이미지·파일·메일 미리보기, 메일·업무·캘린더 작성, 조직도 등 나머지 창은 항상 불투명.
   // 주소가 아직 없는(막 만들어진) 창도 불투명으로 시작해 깜빡임을 막고, 주소가 정해지면 다시 판단한다.
-  const CHAT_URL_RE = /^file:|^https:\/\/[^/]+\/messenger\/?(?:[?#]|$)|^https:\/\/[^/]+\/messenger\/(?:popup|channels)\/\d+(?:\/threads\/\d+)?\/?(?:[?#]|$)/;
+  // 앱 껍데기 창: 4.0.3 이하 file://, 4.0.4+ dooray-messenger-file:// (사용자 정의 프로토콜). 이 창 안에 메신저 화면이 들어 있다
+  const CHAT_URL_RE = /^file:|^[a-z][a-z0-9+.-]*-file:|^https:\/\/[^/]+\/messenger\/?(?:[?#]|$)|^https:\/\/[^/]+\/messenger\/(?:popup|channels)\/\d+(?:\/threads\/\d+)?\/?(?:[?#]|$)/;
   const isOpaqueWindow = (w) => {
     try {
       return !CHAT_URL_RE.test(w.webContents.getURL() || "");
@@ -264,10 +269,16 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
       // core.js 가 보낸 환경/화면 점검 결과는 로그에만 남긴다 (Dooray 버전별로 무엇이 깨졌는지 추적)
       if (m.env) hlog('env', m.env);
       if (m.health) hlog('health', m.health);
+      // 복사본 모드 끄기: 표시 파일을 지우고 Dooray Skin 을 다시 실행(원래 Dooray + 디버그 포트 방식으로 돌아간다)
+      if (HOST_COPY && m.hostMode === false) leaveHostCopy('사용자가 복사본 모드를 끔');
       if ('early' in m) saveEarly(m.early);
       if (typeof m.windowOpacity === 'number') {
+        const prev = opacity;
         opacity = Math.max(0.3, Math.min(1, m.windowOpacity));
         BrowserWindow.getAllWindows().forEach(applyOpacity);
+        // 진단용: 투명도가 바뀔 때 창별 판정을 남긴다 (Dooray 창 주소 규칙이 바뀌면 여기서 드러난다)
+        if (prev !== opacity)
+          hlog('opacity', opacity, BrowserWindow.getAllWindows().map((w) => { try { return (isOpaqueWindow(w) ? 'opaque ' : 'chat ') + w.webContents.getURL().slice(0, 60); } catch { return '?'; } }).join(' | '));
       }
       // 다크 모드: 창 제목 표시줄·테두리(macOS 창 크롬, 시스템 메뉴)를 어둡게. 끄면 OS 설정을 따른다
       if (typeof m.dark === 'boolean' && nativeTheme) {
@@ -289,6 +300,42 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
     wc.on('console-message', onConsole);
     if (!wc.isLoading()) inject(wc, 'existing');
   };
+  // ---- 복사본 모드(Mac 4.0.4+, 창 투명도용) 전용 ----
+  // Dooray 자체 업데이트는 "실행 중인 앱"에 설치되는데, 복사본은 서명이 달라 설치가 실패한다.
+  // 그래서 복사본에서 업데이트를 시작하면 원래 Dooray 로 바꿔 실행해 거기서 업데이트하게 한다.
+  // (주입기는 host-update.json 이 있는 동안 원래 Dooray 를 건드리지 않고, 버전이 바뀌면 복사본을 새로 만든다)
+  function leaveHostCopy(why, forUpdate) {
+    try {
+      const path = req('path');
+      const cp = req('child_process');
+      if (forUpdate) fs.writeFileSync(path.join(OPT.data, 'host-update.json'), JSON.stringify({ at: Date.now(), from: appVer }));
+      else fs.rmSync(path.join(OPT.data, 'host-mode.on'), { force: true });
+      hlog('leave host copy:', why);
+      const target = forUpdate ? OPT.originalApp : OPT.skinApp;
+      // 이 Dooray 가 완전히 끝난 뒤 실행 (같은 데이터 폴더를 쓰므로 동시에 둘이 뜰 수 없다)
+      cp.spawn('/bin/sh', ['-c', 'sleep 2; /usr/bin/open -n "$0"', target], { detached: true, stdio: 'ignore' }).unref();
+      setTimeout(() => app.quit(), 200);
+    } catch (e) {
+      hlog('leave host copy error', String(e && e.message));
+    }
+  }
+  if (HOST_COPY) {
+    try {
+      const { autoUpdater } = req('electron');
+      const origCheck = autoUpdater.checkForUpdates.bind(autoUpdater);
+      autoUpdater.checkForUpdates = () => {
+        hlog('Dooray 자체 업데이트 요청 → 원래 Dooray 에서 진행');
+        notifyPages(`window.__drbSkin && window.__drbSkin.hostNotice && window.__drbSkin.hostNotice('Dooray 업데이트를 위해 원래 Dooray 로 다시 시작합니다. 업데이트 후 Dooray Skin 을 다시 실행해 주세요.')`);
+        setTimeout(() => leaveHostCopy('Dooray 업데이트', true), 1500);
+        return undefined;
+      };
+      autoUpdater.__drbOrigCheck = origCheck;
+      hlog('host copy: autoUpdater redirected');
+    } catch (e) {
+      hlog('host copy autoUpdater hook error', String(e && e.message));
+    }
+  }
+
   webContents.getAllWebContents().forEach(attach);
   app.on('web-contents-created', (_e, wc) => attach(wc));
   // 새 창은 만들어질 때 주소가 비어 있으므로, 주소가 정해진 뒤(did-navigate)에 다시 적용해 미리보기 창을 불투명으로 돌린다
@@ -301,6 +348,7 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
   });
   return JSON.stringify({ ok: true, pid: process.pid, wc: webContents.getAllWebContents().length });
 }
+// @@MAIN_HOOK_END
 
 async function cdpEvaluate(port, expression) {
   let target;

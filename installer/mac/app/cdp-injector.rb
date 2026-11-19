@@ -34,12 +34,17 @@ require 'time'
 require 'uri'
 require 'tmpdir'
 
+# 앱(LaunchServices)에서 실행되면 로캘이 없어 기본 인코딩이 US-ASCII 가 될 수 있다 → UTF-8 고정
+Encoding.default_external = Encoding::UTF_8
 TEST = ENV['DRB_TEST'] == '1'
 args = ARGV.each_slice(2).to_h
 APP = args['--app'] || '/Applications/Dooray Messenger.app'
 RES = args['--res'] || File.dirname(File.expand_path(__FILE__))
 DATA = args['--data'] || File.join(Dir.home, 'Library', 'Application Support', 'DooraySkin')
 APP_VERSION = args['--app-version'] || ''
+MODE = args['--mode'] || 'cdp' # cdp | host
+SKIN_APP = args['--skin-app'] || File.expand_path('../..', RES)
+HOST_APP = File.join(DATA, 'host', 'Dooray Messenger.app')
 FileUtils.mkdir_p(DATA)
 LOG = File.join(DATA, 'launcher.log')
 
@@ -68,7 +73,7 @@ ENV_JSON = JSON.generate(
 )
 INJECT_EXPR = "window.__DRB_HOST='desktop';window.__DRB_ENV=#{ENV_JSON};\n#{CORE}\n;'injected'"
 # 화면 상태: core 주입 여부, 로딩 상태, 업데이트 요청, 하트비트(core 의 "호스트 응답 중" 판단용)
-CHECK_EXPR = "JSON.stringify({core: !!window.__drbCore, rs: document.readyState, upd: window.__drbUpdateRequest||null, alive: (window.__drbWatcherAlive=Date.now(),1), v: (window.__drbSkin&&window.__drbSkin.version)||null})"
+CHECK_EXPR = "JSON.stringify({core: !!window.__drbCore, rs: document.readyState, upd: window.__drbUpdateRequest||null, host: window.__drbHostRequest||null, alive: (window.__drbWatcherAlive=Date.now(),1), v: (window.__drbSkin&&window.__drbSkin.version)||null})"
 
 # ---------------------------------------------------------------- 최소 WebSocket 클라이언트
 class WebSocketClient
@@ -382,6 +387,13 @@ def run_event_loop(port, state)
           end
           next
         end
+        # 창 투명도용 복사본 모드 켜기 (패널 버튼) → 표시 파일을 만들고 Dooray Skin 을 다시 실행, 이 주입기는 끝낸다
+        if state['host'] && state['host']['hostMode'] == true
+          File.write(File.join(DATA, 'host-mode.on'), Time.now.utc.iso8601)
+          log '복사본 모드 켜기 요청 → Dooray Skin 다시 실행'
+          relaunch_skin
+          return :handover
+        end
         # 업데이트 요청 ([업데이트] 를 누르면 core.js 가 window.__drbUpdateRequest 를 만든다)
         if state['upd'] && !state_updating?
           set_updating(true)
@@ -470,40 +482,377 @@ def watch_for_plain_dooray(port, restarts)
   end
 end
 
+# ---------------------------------------------------------------- 복사본 모드 (Mac 4.0.4+ 에서 창 투명도용)
+# Dooray 원본은 건드리지 않는다. 데이터 폴더 host/ 에 APFS 복제(cp -c, 디스크를 거의 쓰지 않음)로 복사본을 만들고,
+# Electron 보안 설정 중 EnableNodeCliInspectArguments 하나만 다시 켠 뒤(RunAsNode 는 꺼진 채) ad-hoc 서명한다.
+# 복사본을 --inspect 로 실행해 메인 프로세스 훅(launcher.js 의 mainHook)을 심는다 → 4.0.3 과 같은 전체 기능.
+SENTINEL = 'dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'.b
+
+def framework_bin(app)
+  Dir.glob(File.join(app, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Versions', '*', 'Electron Framework')).first
+end
+
+def plist_version(app)
+  out, = Open3.capture2e('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', File.join(app, 'Contents', 'Info.plist'))
+  out.strip
+end
+
+# fuse 위치(모든 아키텍처 조각)와 값. 반환: [[offset, '0101'], ...]
+def read_fuses(fw)
+  data = File.binread(fw)
+  res = []
+  i = -1
+  while (i = data.index(SENTINEL, i + 1))
+    res << [i + 34, data.byteslice(i + 34, 4)]
+  end
+  res
+end
+
+def source_key
+  fw = framework_bin(APP)
+  "#{plist_version(APP)}|#{File.mtime(fw).to_i}|#{File.size(fw)}"
+end
+
+def host_ok?
+  fw = framework_bin(HOST_APP)
+  return false unless fw && File.exist?(File.join(DATA, 'host', 'source.json'))
+  src = JSON.parse(File.read(File.join(DATA, 'host', 'source.json'))) rescue {}
+  return false unless src['key'] == source_key
+  read_fuses(fw).all? { |_o, v| v[3] == '1' }
+end
+
+# 복사본을 만들거나(원본 버전이 바뀌었으면) 다시 만든다. 반환: true/false
+def ensure_host
+  return true if host_ok?
+  log "복사본 만들기 (원본 Dooray #{plist_version(APP)})"
+  dir = File.join(DATA, 'host')
+  FileUtils.rm_rf(dir)
+  FileUtils.mkdir_p(dir)
+  _, st = Open3.capture2e('/bin/cp', '-Rc', APP, HOST_APP) # APFS 복제
+  unless st.success?
+    _, st = Open3.capture2e('/usr/bin/ditto', APP, HOST_APP)
+    return log('[실패] 복사본 복사') && false unless st.success?
+  end
+  fw = framework_bin(HOST_APP)
+  fuses = read_fuses(fw)
+  if fuses.empty?
+    log '[실패] 복사본에서 보안 설정(fuse) 위치를 찾지 못함'
+    return false
+  end
+  # 바꾸는 것은 4번째 값(EnableNodeCliInspectArguments) 한 바이트씩만. 제자리 쓰기라 복제 파일이 통째로 복사되지 않는다
+  File.open(fw, 'r+b') do |f|
+    fuses.each do |off, _v|
+      f.seek(off + 3)
+      f.write('1')
+    end
+  end
+  ent = File.join(dir, 'entitlements.plist')
+  out, = Open3.capture2e('/usr/bin/codesign', '-d', '--entitlements', '-', '--xml', APP)
+  File.write(ent, out[out.index('<?xml')..-1]) if out.include?('<?xml')
+  cmd = ['/usr/bin/codesign', '--force', '--deep', '--sign', '-']
+  cmd += ['--entitlements', ent] if File.exist?(ent)
+  out, st = Open3.capture2e(*cmd, HOST_APP)
+  unless st.success?
+    log "[실패] 복사본 서명: #{out.strip[0, 300]}"
+    return false
+  end
+  _, st = Open3.capture2e('/usr/bin/codesign', '--verify', '--deep', '--strict', HOST_APP)
+  unless st.success?
+    log '[실패] 복사본 서명 검증'
+    return false
+  end
+  system('/usr/bin/xattr', '-dr', 'com.apple.quarantine', HOST_APP, err: File::NULL)
+  File.write(File.join(dir, 'source.json'), JSON.generate(key: source_key, version: plist_version(APP), at: Time.now.utc.iso8601))
+  log "복사본 준비 완료: #{read_fuses(framework_bin(HOST_APP)).map(&:last).join(',')}"
+  true
+rescue StandardError => e
+  log "[실패] 복사본: #{e.message}"
+  false
+end
+
+def pid_command(pid)
+  out, = Open3.capture2e('/bin/ps', '-o', 'command=', '-p', pid.to_s)
+  out.strip
+end
+
+def host_pids
+  return (File.exist?(ENV['DRB_ALIVE_FILE'].to_s) ? [1] : []) if TEST
+  dooray_pids.select { |p| pid_command(p).include?(File.join(DATA, 'host')) }
+end
+
+def free_port
+  srv = TCPServer.new('127.0.0.1', 0)
+  port = srv.addr[1]
+  srv.close
+  port
+end
+
+def launch_host(port)
+  if TEST
+    log "(시험) 복사본 실행 생략 inspect=#{port}"
+    return
+  end
+  quit_dooray unless dooray_pids.empty?
+  system('/usr/bin/open', '-a', HOST_APP, '--args', "--inspect=127.0.0.1:#{port}")
+  log "복사본 Dooray 실행 (inspect #{port})"
+end
+
+# 메인 프로세스 훅 = launcher.js 의 mainHook 을 그대로 쓴다 (표시 사이를 잘라냄)
+def hook_expr(opts)
+  src = File.read(File.join(RES, 'launcher.js'), encoding: 'UTF-8')
+  a = src.index("function mainHook(")
+  b = src.index('// @@MAIN_HOOK_END')
+  raise 'launcher.js 에서 mainHook 을 찾지 못함' unless a && b
+  fn = src[a...b].strip
+  "(#{fn})(#{JSON.generate(CORE)}, #{JSON.generate(File.join(DATA, 'hook.log'))}, #{JSON.generate(File.join(DATA, 'early.json'))}, #{JSON.generate(opts)})"
+end
+
+# Node 인스펙터(메인 프로세스)에 붙어 식을 평가한다
+def inspector_eval(port, expr, timeout: 60)
+  target = nil
+  deadline = Time.now + 30
+  while Time.now < deadline && target.nil?
+    begin
+      list = Net::HTTP.start('127.0.0.1', port, open_timeout: 1, read_timeout: 2) { |h| JSON.parse(h.get('/json/list').body) }
+      target = list.find { |t| t['webSocketDebuggerUrl'] }
+    rescue StandardError
+      nil
+    end
+    sleep 0.25 unless target
+  end
+  raise "복사본 메인 프로세스(inspect #{port})에 연결하지 못함" unless target
+  ws = WebSocketClient.new(target['webSocketDebuggerUrl'])
+  id = 0
+  call = lambda do |method, params|
+    id += 1
+    my = id
+    ws.send_text(JSON.generate(id: my, method: method, params: params))
+    t_end = Time.now + timeout
+    loop do
+      raise "#{method} 응답 없음" if Time.now > t_end
+      ws.read_messages(0.5).each do |m|
+        o = JSON.parse(m) rescue next
+        return o if o['id'] == my
+      end
+    end
+  end
+  call.call('Runtime.enable', {})
+  ready = "(()=>{try{const r=typeof require==='function'?require:process.mainModule.require;return r('electron').app.isReady()}catch(e){return 'ERR:'+e.message}})()"
+  60.times do
+    r = call.call('Runtime.evaluate', { expression: ready, includeCommandLineAPI: true, returnByValue: true })
+    break if r.dig('result', 'result', 'value') == true
+    sleep 0.25
+  end
+  r = call.call('Runtime.evaluate', { expression: expr, includeCommandLineAPI: true, returnByValue: true, awaitPromise: true })
+  value = r.dig('result', 'result', 'value')
+  if value.nil? && !r.dig('result', 'exceptionDetails')
+    # 실제 Electron 에서 결과 값이 비어 오는 경우가 있었다(2026-11-19). 훅은 심어졌을 수 있으니 직접 확인한다
+    log "hook 응답에 값 없음: #{r.to_json[0, 300]}"
+    probe = "(()=>{try{return global.__drbHooked?JSON.stringify({ok:true,pid:process.pid,probe:true}):JSON.stringify({ok:false,probe:true})}catch(e){return 'ERR:'+e.message}})()"
+    3.times do
+      pr = call.call('Runtime.evaluate', { expression: probe, includeCommandLineAPI: true, returnByValue: true })
+      value = pr.dig('result', 'result', 'value')
+      break if value
+      log "probe 응답: #{pr.to_json[0, 300]}"
+      sleep 0.5
+    end
+  end
+  # 인스펙터 닫기 (다른 프로그램이 붙지 못하게)
+  call.call('Runtime.evaluate', { expression: "(()=>{const i=(typeof require==='function'?require:process.mainModule.require)('inspector');setTimeout(()=>{try{i.close()}catch(e){}},300);return 'closing'})()", includeCommandLineAPI: true }) rescue nil
+  raise "훅 오류: #{r['result']['exceptionDetails'].to_json[0, 300]}" if r.dig('result', 'exceptionDetails')
+  value
+ensure
+  ws&.close
+end
+
+def host_opts
+  { strategy: 'host-copy', data: DATA, originalApp: APP, skinApp: SKIN_APP }
+end
+
+# 복사본을 실행하고 훅을 심는다. 반환: 훅이 보고한 pid 또는 nil
+def start_host
+  port = ENV['DRB_INSPECT_PORT'] ? ENV['DRB_INSPECT_PORT'].to_i : free_port
+  launch_host(port)
+  started = Time.now
+  out = inspector_eval(port, hook_expr(host_opts))
+  log "hook result #{out}"
+  parsed = JSON.parse(out.to_s) rescue {}
+  return parsed['pid'] if parsed['ok']
+  # 마지막 안전장치: 이번에 실행한 복사본 프로세스가 hook.log 에 'hook installed' 를 남겼으면 성공
+  hp = host_pids
+  lines = (File.readlines(File.join(DATA, 'hook.log')).last(200) rescue [])
+  hit = lines.reverse.find do |l|
+    t = (Time.parse(l[/\[(.*?)\]/, 1]) rescue nil)
+    t && t >= started - 2 && l.include?('hook installed') && hp.any? { |p| l.include?("pid=#{p} ") }
+  end
+  if hit
+    pid = hit[/pid=(\d+)/, 1].to_i
+    log "hook.log 로 훅 확인 (pid #{pid})"
+    return pid
+  end
+  nil
+rescue StandardError => e
+  log "[실패] 복사본 훅: #{e.message}"
+  nil
+end
+
+def relaunch_skin
+  return log('(시험) Dooray Skin 다시 실행 생략') if TEST
+  pid = Process.spawn('/bin/sh', '-c', 'sleep 2; /usr/bin/open -n "$0"', SKIN_APP, out: File::NULL, err: File::NULL)
+  Process.detach(pid)
+end
+
+def core_version
+  (CORE[/VERSION = '([\d.]+)'/, 1]) || '?'
+end
+
+def read_state
+  JSON.parse(File.read(File.join(DATA, 'state.json'))) rescue {}
+end
+
+def write_state(h)
+  File.write(File.join(DATA, 'state.json'), JSON.generate(h.merge(at: Time.now.utc.iso8601)))
+end
+
+def host_update_pending?
+  f = File.join(DATA, 'host-update.json')
+  return false unless File.exist?(f)
+  at = (JSON.parse(File.read(f))['at'].to_i rescue 0)
+  if Time.now.to_f * 1000 - at < 20 * 60 * 1000
+    true
+  else
+    File.delete(f) rescue nil
+    false
+  end
+end
+
+# 복사본 모드 감시: 훅이 없는 Dooray(원본이든 복사본이든)가 막 시작되면 복사본+훅으로 다시 실행
+def host_keeper(hooked_pid)
+  restarts = []
+  seen = {}
+  loop do
+    sleep 2
+    pids = dooray_pids
+    next if pids.empty?
+    next if pids.include?(hooked_pid)
+    pid = pids.first
+    next if seen[pid]
+    age = age_seconds(pid)
+    next if age < 6
+    seen[pid] = true
+    if keeper_off? || host_update_pending?
+      log "훅 없는 Dooray(pid #{pid}) 감지했지만 #{keeper_off? ? 'keeper.off' : 'Dooray 업데이트 진행 중'} 이라 그대로 둠"
+      next
+    end
+    if age > 90
+      log "훅 없는 Dooray(pid #{pid}, #{age}초 전 시작)는 그대로 둠"
+      next
+    end
+    restarts.select! { |t| Time.now - t < 600 }
+    if restarts.size >= 2
+      log '10분 안에 두 번 다시 시작해 자동 복구를 잠시 멈춤'
+      next
+    end
+    restarts << Time.now
+    log "훅 없는 Dooray 감지(pid #{pid}, #{age}초 전) → 복사본으로 다시 실행"
+    unless ensure_host
+      notify('창 투명도용 Dooray 복사본을 만들지 못했습니다. launcher.log 를 확인해 주세요.')
+      next
+    end
+    np = start_host
+    if np
+      hooked_pid = np
+      write_state(strategy: 'host-copy', pid: Process.pid, doorayPid: np, version: core_version, appVersion: plist_version(APP))
+    end
+  end
+end
+
 # ---------------------------------------------------------------- main
-def main
+# 이전 주입기가 감시 중이면 넘겨받는다 (Skin 업데이트·모드 전환 뒤 새 코드로 갈아타기 위해)
+def take_lock
+  lock = File.open(File.join(DATA, 'injector.lock'), File::RDWR | File::CREAT, 0o644)
+  return lock if lock.flock(File::LOCK_EX | File::LOCK_NB)
+  old = read_state['pid'].to_i
+  # pid 가 재사용됐을 수 있으니 실제로 이 주입기인지 확인하고 끈다
+  if old.positive? && old != Process.pid && (TEST || pid_command(old).include?('cdp-injector.rb'))
+    log "이전 주입기(pid #{old}) 종료 후 넘겨받기"
+    Process.kill('TERM', old) rescue nil
+  end
+  30.times do
+    return lock if lock.flock(File::LOCK_EX | File::LOCK_NB)
+    sleep 0.2
+  end
+  nil
+end
+
+def background!
+  return if TEST
+  child = fork
+  if child
+    Process.detach(child)
+    log "백그라운드 감시 시작 (pid #{child})"
+    exit 0
+  end
+  Process.setsid
+  $stdin.reopen(File::NULL)
+end
+
+def main_host
+  log "injector start · mac · Dooray #{APP_VERSION} · strategy=host-copy#{TEST ? ' (TEST)' : ''}"
+  lock = take_lock
+  unless lock
+    log '[실패] 이전 주입기를 넘겨받지 못함'
+    exit 1
+  end
+  unless ensure_host
+    notify('창 투명도용 Dooray 복사본을 만들지 못해 기본 방식(투명도 없음)으로 실행합니다.')
+    File.delete(File.join(DATA, 'host-mode.on')) rescue nil
+    lock.close
+    return main_cdp
+  end
+  st = read_state
+  hp = host_pids
+  if st['strategy'] == 'host-copy' && st['version'] == core_version && st['doorayPid'] && hp.include?(st['doorayPid'].to_i)
+    log "이미 복사본 Dooray(pid #{st['doorayPid']})에 훅 적용됨 → 창만 활성화"
+    system('/usr/bin/open', '-a', HOST_APP) unless TEST
+    hooked = st['doorayPid'].to_i
+  else
+    hooked = start_host
+    unless hooked
+      notify('Dooray 복사본에 Skin 을 연결하지 못했습니다. 기본 방식으로 실행합니다.')
+      File.delete(File.join(DATA, 'host-mode.on')) rescue nil
+      lock.close
+      return main_cdp
+    end
+  end
+  background!
+  write_state(strategy: 'host-copy', pid: Process.pid, doorayPid: hooked, version: core_version, appVersion: APP_VERSION)
+  return if ENV['DRB_ONESHOT'] == '1'
+  host_keeper(hooked)
+end
+
+def main_cdp
   port = debug_port
   log "injector start · mac · Dooray #{APP_VERSION} · strategy=cdp-port · port=#{port}#{TEST ? ' (TEST)' : ''}"
-  # 한 번에 하나만 감시한다. 이미 감시 중이면 Dooray 만 확인하고 끝낸다
-  lock = File.open(File.join(DATA, 'injector.lock'), File::RDWR | File::CREAT, 0o644)
-  holder = lock.flock(File::LOCK_EX | File::LOCK_NB)
+  lock = take_lock
   info = ensure_dooray_with_port(port)
   unless info
     log "[실패] 디버그 포트 #{port} 가 열리지 않았습니다 → Skin 을 적용하지 못했습니다"
     notify('Dooray 4.0.4 이상에서 Skin 을 연결하지 못했습니다. launcher.log 를 확인해 주세요.')
     exit 1
   end
-  unless holder
-    log '이미 다른 주입기가 감시 중 → Dooray 만 확인하고 종료'
+  unless lock
+    log '이전 주입기를 넘겨받지 못함 → Dooray 만 확인하고 종료'
     return
   end
   # 여기까지(Dooray 를 디버그 포트로 띄우는 것)가 성공하면 부모는 끝내고, 자식이 백그라운드(새 세션)에서 감시를 이어 간다.
-  # 앱(래퍼)이 바로 끝나도 감시는 남는다. flock 은 fork 로 자식에게 이어진다.
-  unless TEST
-    child = fork
-    if child
-      Process.detach(child)
-      log "백그라운드 감시 시작 (pid #{child})"
-      exit 0
-    end
-    Process.setsid
-    $stdin.reopen(File::NULL)
-  end
-  File.write(File.join(DATA, 'state.json'), JSON.generate(strategy: 'cdp-port', pid: Process.pid, appVersion: APP_VERSION, at: Time.now.utc.iso8601))
+  background!
+  write_state(strategy: 'cdp-port', pid: Process.pid, version: core_version, appVersion: APP_VERSION)
   restarts = []
   fails = 0
   loop do
     r = run_event_loop(port, nil)
+    return if r == :handover
     if r != :exit
       # 연결이 끊겼다. 포트까지 닫혔으면 Dooray 가 종료/재시작된 것(자체 업데이트 포함) → 감시 모드. 포트가 열려 있으면 일시 끊김이니 재연결
       if version_info(port)
@@ -515,7 +864,6 @@ def main
         sleep 2
         next
       end
-      r = :exit
     end
     fails = 0
     log 'Dooray 종료(또는 포트 닫힘) → 감시 대기'
@@ -525,6 +873,13 @@ def main
   log 'injector stop'
 end
 
-trap('TERM') { log 'SIGTERM'; exit 0 }
-trap('INT') { exit 0 }
-main
+def main
+  MODE == 'host' ? main_host : main_cdp
+end
+
+# DRB_LIB=1: 함수만 불러오기(시험용)
+unless ENV['DRB_LIB'] == '1'
+  trap('TERM') { log 'SIGTERM'; exit 0 }
+  trap('INT') { exit 0 }
+  main
+end

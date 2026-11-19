@@ -30,7 +30,8 @@ Dooray 는 **앱**(Mac/Windows 설치본)과 **웹**(서버가 배포하는 화�
 | Dooray | 붙는 방식 | 되는 것 | 안 되는 것 | 확인 |
 |-|-|-|-|-|
 | Mac 4.0.3 이하 | `node-hook` (메인 프로세스 훅) | 전부 | - | 4.0.3 실사용 확인 |
-| **Mac 4.0.4 이상** | `cdp-port` (Chromium 디버그 포트 + Ruby 주입기) | 배경, 테마 색, 다크 모드, 잠금, 사이드바 버튼/패널, 업데이트 알림·설치 | **창 투명도, 제목 표시줄 다크** (메인 프로세스에 접근 불가) | fuse·코드 분석, 가짜 CDP 테스트. **실제 4.0.4 앱 적용은 확인 전** |
+| **Mac 4.0.4 이상 (기본)** | `cdp-port` (Chromium 디버그 포트 + Ruby 주입기) | 배경, 테마 색, 다크 모드, 잠금, 사이드바 버튼/패널, 업데이트 알림·설치 | **창 투명도, 제목 표시줄 다크** (메인 프로세스에 접근 불가) | 실기기 확인: 다크 모드·잠금 정상 (2026-11-19) |
+| **Mac 4.0.4 이상 (복사본, 선택)** | `host-copy` (Dooray 복사본 + 메인 프로세스 훅, Ruby 가 연결) | 전부 (창 투명도 포함) | Dooray 자체 업데이트는 원래 앱으로 다시 시작해 진행 | 실기기 확인: 창 투명도 반영 (2026-11-19, Skin 0.8.2) |
 | Windows 2.2.x | `webview2-port` | 전부 | - | 2.2.2 |
 | 웹 확장 | 확장 프로그램 | 배경, 테마 색, 다크 모드, 잠금 | 창 투명도(브라우저라 불가) | 웹 릴리스 `01a1eddd…` 점검 8/8 |
 
@@ -84,7 +85,21 @@ Dooray 는 **앱**(Mac/Windows 설치본)과 **웹**(서버가 배포하는 화�
   끄기: `~/Library/Application Support/DooraySkin/keeper.off` 파일 생성.
 - 포트가 열리지 않으면(Dooray 가 막은 경우) Skin 은 적용되지 않고 알림과 `launcher.log` 에 기록됩니다.
 
-## 7. 앞으로의 선택지 (창 투명도를 Mac 4.0.4+ 에서 쓰려면)
+## 7. Mac 4.0.4+ 에서 창 투명도: 복사본 모드 (v0.8.1~, 선택)
+
+패널 > 맨 위 "복사본으로 창 투명도 켜기" 를 누르면 켜집니다 (데이터 폴더의 `host-mode.on`). 끄기는 패널의 "원래 방식으로 돌아가기".
+
+- 원본 `/Applications/Dooray Messenger.app` 은 그대로 두고, `~/Library/Application Support/DooraySkin/host/` 에 APFS 복제(`cp -c`)로 복사본을 만든다.
+- 복사본의 Electron 보안 설정 중 **`EnableNodeCliInspectArguments` 한 바이트만** 다시 켜고(모든 아키텍처 조각), `RunAsNode` 는 꺼진 채로 둔다. 원본의 entitlements 로 ad-hoc 재서명(`codesign --force --deep -s -`), `codesign --verify --deep --strict` 확인.
+- 복사본을 `--inspect=127.0.0.1:<임의 포트>` 로 실행하고, Ruby 주입기가 Node 인스펙터에 붙어 `launcher.js` 의 `mainHook`(표시 `@@MAIN_HOOK_BEGIN/END` 사이)을 그대로 심은 뒤 인스펙터를 닫는다.
+- 원본 Dooray 버전(또는 Electron Framework 파일)이 바뀌면 다음 실행 때 복사본을 다시 만든다 (`host/source.json`).
+- Dooray 자체 업데이트: 복사본은 서명이 달라 Squirrel 업데이트가 설치되지 않으므로, 복사본에서 업데이트를 시작하면 훅이 원래 Dooray 로 다시 시작한다(`host-update.json`, 20분 동안 감시가 원래 Dooray 를 건드리지 않음). 업데이트 후 Dooray Skin 을 다시 실행하면 새 버전으로 복사본을 만든다.
+- 처음 한 번: 키체인("Dooray Messenger Safe Storage" 항상 허용, Mac 로그인 암호)과 카메라·마이크 권한을 다시 물을 수 있다.
+- 보안: 복사본은 4.0.3 과 같은 수준(디버거 인자 허용)으로 돌아간다. 같은 PC 의 다른 프로그램이 복사본을 디버거 인자로 실행하면 Dooray 세션에 접근할 수 있다. 회사 보안 정책과 맞는지 확인하고 쓸 것. 원본 앱은 바뀌지 않는다.
+- 창 주소: 4.0.4 부터 앱 껍데기 창이 `dooray-messenger-file://` 로 바뀌었다. 투명도 "대화 창" 판정은 `file:` 와 `*-file:` 스킴을 모두 대화 창으로 본다(0.8.2). 판정 결과는 투명도가 바뀔 때 `hook.log` 에 `opacity` 줄로 남는다.
+- 디스크: 복제라 대부분 공유되지만, 재서명으로 다시 쓰이는 실행 파일만큼(수백 MB) 추가로 쓴다.
+
+### 이전 메모
 
 창 투명도는 Dooray 메인 프로세스에서만 설정할 수 있습니다. 가능한 방법은 Dooray 앱을 **복사해 보안 설정을 되돌리고 다시 서명**하는 것인데,
 Keychain 접근 확인 창, 카메라/마이크 권한 재요청, Dooray 업데이트마다 재생성이 필요하고 NHN 이 의도적으로 잠근 설정을 푸는 일이라
