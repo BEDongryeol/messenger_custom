@@ -49,7 +49,12 @@ if (-not ($running -and $portUp)) {
 }
 
 $core = [IO.File]::ReadAllText((Join-Path $data 'core.js'), [Text.Encoding]::UTF8)
-$injectExpr = "window.__DRB_HOST='desktop';`n" + $core + "`n;'injected'"
+# Dooray 앱 버전(exe 파일 버전)을 core.js 에 알린다: 호환성 표시/로그용 (동작에는 영향 없음)
+$doorayVer = ''
+try { $doorayVer = ((Get-Item $exe).VersionInfo.ProductVersion -replace '[^\d.]', '').Trim('.') } catch {}
+Write-DrbLog "dooray app version: $doorayVer"
+$drbEnv = "{platform:'win',app:'$doorayVer',strategy:'webview2-port',caps:{windowOpacity:true,darkTitleBar:true,autoUpdate:true}}"
+$injectExpr = "window.__DRB_HOST='desktop';window.__DRB_ENV=$drbEnv;`n" + $core + "`n;'injected'"
 # 시작 덮개(다크 모드 깜빡임 방지): 새 문서마다 페이지보다 먼저 실행 (이벤트 방식에서만 등록 가능)
 $earlyPath = Join-Path $data 'early.js'
 $earlySrc = if (Test-Path $earlyPath) { [IO.File]::ReadAllText($earlyPath, [Text.Encoding]::UTF8) } else { $null }

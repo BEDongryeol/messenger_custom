@@ -44,10 +44,59 @@ if [ ! -s "$ICNS" ] && [ -f "$APP/Contents/Resources/electron.icns" ]; then
   cp "$APP/Contents/Resources/electron.icns" "$ICNS" 2>/dev/null && touch "$TARGET" && log "icon copied from Dooray"
 fi
 
+# 2) Dooray 버전과 "붙는 방법" 결정
+#    Dooray 는 4.0.4 부터 Electron 보안 설정(fuse)을 잠가 Node 모드 실행(RunAsNode)과 --inspect 를 막았다.
+#      열려 있음 → node-hook : 메인 프로세스 훅 (창 투명도, 제목 표시줄 다크, 앱 안 자동 설치까지 전부)
+#      잠겨 있음 → cdp-port  : Chromium 디버그 포트 + Ruby 주입기 (화면 단위 기능. 창 투명도는 불가)
+#    fuse 는 Electron Framework 바이너리 안의 센티넬 문자열 뒤에 [버전][길이][퓨즈...] 로 들어 있다('1' 켜짐, '0' 꺼짐).
+DOORAY_VER="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null)"
+fuse_read() {
+  local fw off b
+  fw="$(ls -d "$APP"/Contents/Frameworks/Electron\ Framework.framework/Versions/*/Electron\ Framework 2>/dev/null | head -1)"
+  [ -z "$fw" ] && { echo unknown; return; }
+  # 360MB 를 매번 훑지 않도록 (Dooray 버전 + 파일 수정 시각)별로 결과를 저장
+  local key cache
+  key="$DOORAY_VER|$(/usr/bin/stat -f %m "$fw" 2>/dev/null)"
+  cache="$DATA/fuse-cache.txt"
+  if [ -f "$cache" ] && [ "$(head -1 "$cache")" = "$key" ]; then sed -n 2p "$cache"; return; fi
+  off="$(LC_ALL=C /usr/bin/grep -a -b -o -m1 'dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX' "$fw" 2>/dev/null | head -1 | cut -d: -f1)"
+  if [ -z "$off" ]; then echo unknown; return; fi
+  b="$(/bin/dd if="$fw" bs=1 skip=$((off + 34)) count=4 2>/dev/null | LC_ALL=C /usr/bin/od -An -c | tr -d ' ')"
+  [ ${#b} -lt 4 ] && { echo unknown; return; }
+  local out="RunAsNode=${b:0:1} NodeOptions=${b:2:1} Inspect=${b:3:1}"
+  printf '%s\n%s\n' "$key" "$out" > "$cache" 2>/dev/null
+  echo "$out"
+}
+FUSES="$(fuse_read)"
+case "$FUSES" in
+  *"RunAsNode=1"*"Inspect=1"*) STRATEGY="node-hook" ;;
+  unknown) STRATEGY="node-hook" ;; # fuse 를 읽지 못하면(fuse 가 없던 구형 Electron) 예전 방식
+  *) STRATEGY="cdp-port" ;;
+esac
+log "Dooray $DOORAY_VER · fuses: $FUSES · strategy: $STRATEGY"
+printf '{"app":"%s","fuses":"%s","strategy":"%s","skin":"%s","at":"%s"}\n' "$DOORAY_VER" "$FUSES" "$STRATEGY" "$(grep -o "VERSION = '[0-9.]*'" "$RES/core.js" 2>/dev/null | grep -o "[0-9.]*")" "$(date -u +%FT%TZ)" > "$DATA/compat-state.json"
+
 # 3) 실행
-if ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Dooray Messenger" "$RES/launcher.js" >>"$LOG" 2>&1; then
-  [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. 앞으로 Launchpad/Spotlight 의 Dooray Skin 으로 실행하세요."
+if [ "$STRATEGY" = "node-hook" ]; then
+  if ELECTRON_RUN_AS_NODE=1 "$APP/Contents/MacOS/Dooray Messenger" "$RES/launcher.js" >>"$LOG" 2>&1; then
+    [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. 앞으로 Launchpad/Spotlight 의 Dooray Skin 으로 실행하세요."
+  else
+    notify "실행 실패. ~/Library/Application Support/DooraySkin/launcher.log 를 확인해 주세요."
+    exit 1
+  fi
 else
-  notify "실행 실패. ~/Library/Application Support/DooraySkin/launcher.log 를 확인해 주세요."
-  exit 1
+  # Dooray 4.0.4+: macOS 기본 Ruby(/usr/bin/ruby, 개발자 도구 불필요)로 디버그 포트 주입기 실행.
+  # --disable-gems: 표준 라이브러리만 쓰므로 RubyGems 를 읽지 않는다(시작이 빠르고 /Library/Ruby 권한 문제가 없다)
+  if ! /usr/bin/ruby --disable-gems -e 'require "socket"; require "json"; require "net/http"' >/dev/null 2>&1; then
+    log "ruby 를 사용할 수 없어 Skin 없이 Dooray 만 실행"
+    notify "이 Mac 에서는 Dooray 4.0.4 이상에 Skin 을 적용할 수 없습니다(Ruby 없음). Dooray 만 실행합니다."
+    /usr/bin/open -a "$APP"
+    exit 1
+  fi
+  if /usr/bin/ruby --disable-gems "$RES/cdp-injector.rb" --app "$APP" --res "$RES" --data "$DATA" --app-version "$DOORAY_VER" >>"$LOG" 2>&1; then
+    [ -n "${FIRST_INSTALL:-}" ] && notify "설치 완료. Dooray $DOORAY_VER 에서는 창 투명도를 쓸 수 없고 나머지 기능은 사용할 수 있습니다."
+  else
+    notify "Dooray $DOORAY_VER 에 Skin 을 연결하지 못했습니다. launcher.log 를 확인해 주세요."
+    exit 1
+  fi
 fi

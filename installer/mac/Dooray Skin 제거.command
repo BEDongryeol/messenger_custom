@@ -8,7 +8,9 @@ for p in "/Applications/Dooray Messenger.app" "$HOME/Applications/Dooray Messeng
 if [ -f "$SKIN/Contents/Resources/dock.sh" ]; then
   /bin/bash "$SKIN/Contents/Resources/dock.sh" apply-restore "$APP" >/dev/null 2>&1 || true
 fi
+# Dooray 4.0.4+ 에서 백그라운드로 남아 있는 주입기(감시)를 먼저 끈다
+/usr/bin/pkill -f "cdp-injector.rb" >/dev/null 2>&1 || true
 rm -rf "$SKIN" "$HOME/Library/Application Support/DooraySkin"
 echo "Dooray Skin 을 제거했습니다. Dock 은 Dooray Messenger 로 되돌렸습니다."
-echo "실행 중인 Dooray 를 종료 후 다시 켜면 원래 상태가 됩니다."
+echo "실행 중인 Dooray 를 종료 후 다시 켜면 원래 상태가 됩니다. (4.0.4 이상에서는 Dooray 를 한 번 종료 후 켜 주세요)"
 read -r -t 20 -p "엔터를 누르면 닫힙니다." _ || true

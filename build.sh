@@ -15,8 +15,8 @@ bom_crlf() { printf '\xEF\xBB\xBF'; crlf "$1"; }
 M=dist/mac; A="$M/Dooray Skin.app"
 mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp installer/mac/app/DooraySkin "$A/Contents/MacOS/DooraySkin"
-cp installer/mac/app/dock.sh src/core.js src/launcher.js "$A/Contents/Resources/"
-chmod +x "$A/Contents/MacOS/DooraySkin" "$A/Contents/Resources/dock.sh"
+cp installer/mac/app/dock.sh installer/mac/app/cdp-injector.rb src/core.js src/early.js src/launcher.js "$A/Contents/Resources/"
+chmod +x "$A/Contents/MacOS/DooraySkin" "$A/Contents/Resources/dock.sh" "$A/Contents/Resources/cdp-injector.rb"
 cp "/Applications/Dooray Messenger.app/Contents/Resources/electron.icns" "$A/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 cat > "$A/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

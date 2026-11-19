@@ -131,6 +131,18 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
   };
   hlog('hook installed');
   const isDooray = (u) => /^https:\/\/([a-z0-9-]+\.)*dooray\.com\//i.test(u || '');
+  // core.js 에 알리는 환경 정보 (호환성 표시·로그용). 이 방식은 메인 프로세스에 붙으므로 모든 기능을 쓸 수 있다
+  let appVer = '';
+  try {
+    appVer = app.getVersion();
+  } catch {}
+  const DRB_ENV = JSON.stringify({
+    platform: process.platform === 'win32' ? 'win' : 'mac',
+    app: appVer,
+    strategy: 'node-hook',
+    caps: { windowOpacity: true, darkTitleBar: true, autoUpdate: true },
+  });
+  hlog('dooray app version', appVer, 'electron', process.versions.electron);
   // 시작 덮개: 다크 모드 사용자가 Dooray 를 켤 때 밝은 화면이 번쩍이지 않게, 대화 화면 문서가 정해지는 순간(did-navigate)
   // 다크 배경색 덮개 CSS 를 넣는다. core.js 가 다크 모드를 적용하면 html[data-drb-ready] 로 걷히고, 4초 뒤엔 스스로 사라진다.
   // 색은 core.js 가 보낸 early 값을 EARLY_FILE 에 저장해 다음 실행 때 쓴다. (src/early.js 의 CSS 와 같은 내용 유지)
@@ -182,7 +194,7 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
     if (wc.isDestroyed()) return;
     const url = wc.getURL();
     if (!isDooray(url)) return hlog('skip', why, wc.id, url.slice(0, 80));
-    wc.executeJavaScript('window.__DRB_HOST="desktop";\n' + CORE_SRC + PROBE, true)
+    wc.executeJavaScript('window.__DRB_HOST="desktop";window.__DRB_ENV=' + DRB_ENV + ';\n' + CORE_SRC + PROBE, true)
       .then((r) => {
         hlog('inject', why, wc.id, url.slice(0, 80), r);
         // 버튼은 SPA 렌더링 뒤에 붙으므로 5초 뒤 상태를 한 번 더 기록
@@ -249,6 +261,9 @@ function mainHook(CORE_SRC, HOOK_LOG, EARLY_FILE) {
     try {
       const m = JSON.parse(msg.slice(8));
       if (m.update && typeof m.update.url === 'string') doUpdate(m.update);
+      // core.js 가 보낸 환경/화면 점검 결과는 로그에만 남긴다 (Dooray 버전별로 무엇이 깨졌는지 추적)
+      if (m.env) hlog('env', m.env);
+      if (m.health) hlog('health', m.health);
       if ('early' in m) saveEarly(m.early);
       if (typeof m.windowOpacity === 'number') {
         opacity = Math.max(0.3, Math.min(1, m.windowOpacity));
