@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.8.0';
+  const VERSION = '0.8.2';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -1286,6 +1286,12 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     <input type="range" min="30" max="100" data-g="windowOpacity">
     <p class="muted" data-ref="winNote"></p>
     <label class="chk" style="margin-top:6px"><input type="checkbox" data-g="sidebarOpacity"> Dooray Skin 버튼 아래에도 표시</label>
+    <p class="muted" data-ref="hostOn" hidden>Dooray 4.0.4+ 복사본으로 실행 중이라 창 투명도를 쓸 수 있습니다. <a href="#" data-act="hostOff">원래 방식으로 돌아가기</a></p>
+    </div>
+    <div data-ref="hostOffer" hidden>
+      <label class="t">두레이 창 투명도</label>
+      <p class="muted" style="margin:2px 0 6px">Dooray 4.0.4 부터 앱이 내부 접근을 막아 창 투명도를 바로 쓸 수 없습니다. Dooray 를 복사한 앱(원본은 그대로)으로 실행하면 쓸 수 있습니다. 처음 한 번 Mac 암호(키체인)와 카메라·마이크 권한을 다시 물을 수 있습니다.</p>
+      <div class="btns"><button data-act="hostOn">복사본으로 창 투명도 켜기</button></div>
     </div>
     <label class="chk" data-ref="menuRow" style="margin-top:6px"><input type="checkbox" data-g="hideMenu"> 상단 메뉴 바(파일·도구·보기…) 숨기기</label>
   </div>
@@ -1454,8 +1460,11 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     const w = $('[data-g=windowOpacity]');
     w.value = config.global.windowOpacity;
     const opOn = IS_DESKTOP && featureOn('windowOpacity');
+    // Mac 4.0.4+ 기본(디버그 포트) 방식: 창 투명도 대신 복사본 모드 안내 / 복사본 모드: 되돌리기 링크
+    $('[data-ref=hostOffer]').hidden = !(IS_DESKTOP && !IS_WIN && ENV.strategy === 'cdp-port');
+    $('[data-ref=hostOn]').hidden = ENV.strategy !== 'host-copy';
     $('[data-ref=opacityBox]').hidden = !opOn; // 브라우저, 또는 앱이 허용하지 않는 환경(Mac 4.0.4+)에서는 창 투명도를 숨김
-    $('[data-ref=winRow]').hidden = !opOn && !(IS_DESKTOP && IS_WIN); // 남는 항목(메뉴 바 숨기기)은 Windows 앱에만
+    $('[data-ref=winRow]').hidden = !opOn && !(IS_DESKTOP && IS_WIN) && $('[data-ref=hostOffer]').hidden; // 남는 항목(메뉴 바 숨기기)은 Windows 앱에만
     $('[data-v=windowOpacity]').textContent = `${config.global.windowOpacity}%`;
     $('[data-ref=winNote]').textContent = '창 전체가 반투명해져 뒤 화면이 비칩니다. (최소 30%, 모든 Dooray 창 공통)';
     $('[data-ref=menuRow]').hidden = !(IS_DESKTOP && IS_WIN); // 메뉴 바는 Windows 앱에만 있음 (macOS 는 시스템 메뉴)
@@ -1620,6 +1629,18 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       if (act === 'themeReset') {
         patchTheme({ color: detectThemeBase(), enabled: false });
         flash('기본 파란색으로 되돌렸습니다.');
+      }
+      if (act === 'hostOn') {
+        if (!confirm('Dooray 를 복사한 앱으로 다시 시작합니다.\n\n- 원래 Dooray 앱은 바뀌지 않습니다.\n- 처음 한 번 Mac 로그인 암호(키체인 "항상 허용")와 카메라·마이크 권한을 다시 물을 수 있습니다.\n- Dooray 자체 업데이트는 원래 앱으로 다시 시작해 진행됩니다.\n\n계속할까요?')) return;
+        window.__drbHostRequest = { hostMode: true };
+        pokeHost('host');
+        return flash('복사본을 준비해 Dooray 를 다시 시작합니다. 처음에는 10초 정도 걸릴 수 있습니다.');
+      }
+      if (act === 'hostOff') {
+        e.preventDefault();
+        if (!confirm('복사본 모드를 끄고 원래 Dooray 로 다시 시작합니다. 창 투명도는 쓸 수 없게 됩니다. 계속할까요?')) return;
+        console.debug('__DRB__:' + JSON.stringify({ hostMode: false }));
+        return flash('원래 Dooray 로 다시 시작합니다.');
       }
       if (act === 'recheck') {
         compatState = null;
@@ -2238,6 +2259,14 @@ button:disabled{opacity:.6;cursor:default}
     showChannel,
     effectiveOpacity,
     get env() { return { ...ENV }; },
+    hostNotice: (msg) => {
+      flash(msg);
+      const d = document.createElement('div');
+      d.textContent = String(msg);
+      d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483646;max-width:360px;padding:10px 14px;border-radius:10px;background:#333;color:#fff;font:13px/1.45 -apple-system,"Apple SD Gothic Neo",sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)';
+      document.body.appendChild(d);
+      setTimeout(() => d.remove(), 8000);
+    },
     get health() { return runHealth(); },
     get compat() { return { ...compatEval(), doc: compatDoc }; },
     featureOn,
