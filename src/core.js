@@ -10,11 +10,29 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.7.1';
+  const VERSION = '0.8.0';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
   const IS_WIN = /Windows/i.test(navigator.userAgent);
+  // ---- 환경 정보: 호스트(Mac 런처/주입기, Windows 감시자)가 window.__DRB_ENV 를 먼저 넣는다. 웹 확장은 없음.
+  const hostEnv = window.__DRB_ENV || {};
+  const ENV = {
+    skin: VERSION,
+    platform: hostEnv.platform || (IS_DESKTOP ? (IS_WIN ? 'win' : 'mac') : 'web'),
+    app: hostEnv.app || (navigator.userAgent.match(/Dooray[ !]*Messenger\/([\d.]+)/i) || [])[1] || null, // Dooray 데스크톱 앱 버전
+    strategy: hostEnv.strategy || (IS_DESKTOP ? 'unknown' : 'extension'), // node-hook | cdp-port | webview2-port | extension
+    electron: (navigator.userAgent.match(/Electron\/([\d.]+)/) || [])[1] || null,
+    chromium: (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1] || null,
+    get web() {
+      return window._posthogReleaseId || null; // Dooray 웹(서버) 릴리스 ID. 서버가 배포할 때마다 바뀐다
+    },
+  };
+  // 주입 방식이 허용하는 기능. 호스트가 false 로 알리면 UI 를 숨긴다(예: Mac 4.0.4+ 는 앱 내부 접근이 막혀 창 투명도 불가)
+  const CAPS = { windowOpacity: IS_DESKTOP, darkTitleBar: IS_DESKTOP, autoUpdate: true, ...(hostEnv.caps || {}) };
+  // 호환성 표(GitHub Pages compat.json). 오프라인이면 캐시, 없으면 "미확인" 으로 동작(기능은 막지 않는다)
+  const COMPAT_URL = 'https://bedongryeol.github.io/messenger_custom/compat.json';
+  const COMPAT_EVERY_MS = 6 * 60 * 60 * 1000;
   // 업데이트 확인: 공개 저장소의 최신 GitHub Release (VERSION 이 올라간 main 커밋마다 Actions 가 만든다)
   const UPDATE_REPO = 'BEDongryeol/messenger_custom';
   // 1순위: GitHub Pages 의 latest.json (CDN 정적 파일, API 호출 한도 없음. Release 때마다 Actions 가 갱신)
@@ -294,7 +312,7 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     imageViewerOpen() ? 100 : Math.max(30, Math.min(100, Number(config.global.windowOpacity) || 100));
   const applyWindowOpacity = () => {
     if (!IS_DESKTOP) return;
-    const v = effectiveOpacity();
+    const v = featureOn('windowOpacity') ? effectiveOpacity() : 100;
     const dk = config.global.dark;
     const msg = JSON.stringify({
       windowOpacity: v / 100,
@@ -832,7 +850,7 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   const ensureSidebarOpacity = () => {
     const existing = document.querySelector('[data-drb-sbop]');
     const item = document.querySelector('[data-drb-sidebar-item]');
-    if (!IS_DESKTOP || config.global.sidebarOpacity === false || !item) {
+    if (!IS_DESKTOP || config.global.sidebarOpacity === false || !featureOn('windowOpacity') || !item) {
       existing?.remove();
       return;
     }
@@ -983,7 +1001,12 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
   };
   const startUpdate = () => {
     if (!update || updateBusy) return;
-    if (IS_DESKTOP && !IS_WIN) {
+    if (IS_DESKTOP && !IS_WIN && ENV.strategy === 'cdp-port') {
+      if (!update.mac) return flash('이 릴리스에 Mac 설치 파일이 없습니다. 릴리스 페이지에서 받아 주세요.');
+      updateBusy = true;
+      window.__drbUpdateRequest = { url: update.mac, version: update.version };
+      pokeHost('update');
+    } else if (IS_DESKTOP && !IS_WIN) {
       if (!update.mac) return flash('이 릴리스에 Mac 설치 파일이 없습니다. 릴리스 페이지에서 받아 주세요.');
       updateBusy = true;
       console.debug('__DRB__:' + JSON.stringify({ update: { url: update.mac, version: update.version } }));
@@ -1005,6 +1028,162 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     window.__drbUpdateRequest = null;
     render();
     flash(`업데이트 실패: ${msg || '알 수 없는 오류'}. 릴리스 페이지에서 직접 받아 주세요.`);
+  };
+
+
+  // ---------------- Dooray 버전 · 호환성 ----------------
+  // Dooray 는 "앱"(Mac/Windows 설치본)과 "웹"(서버가 배포)이 따로 바뀐다. 둘 다 Skin 이 의존하는 부분이 있다.
+  //  - 앱: 주입 통로(Mac: Node 모드/--inspect → 4.0.4 부터 막힘, Windows: WebView2 디버그 포트), 창 주소 규칙, 자체 업데이트
+  //  - 웹: 사이드바 버튼 이름, #main-contents/.js-scroll-area, data-testid, React props(channelId)
+  // 그래서 ① 환경(ENV) 수집 ② 의존 요소 자가 점검 ③ compat.json 의 버전 조합별 상태/기능 끄기 를 함께 쓴다.
+  const verNums = (v) => String(v || '').split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
+  const cmpVer = (a, b) => {
+    const x = verNums(a), y = verNums(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0) ? 1 : -1;
+    return 0;
+  };
+  // 범위 예: ">=4.0.4", ">=2.2.0 <3", "<0.8.0", "4.0.3" (공백으로 AND). 값이 없으면(null) 범위가 비어 있을 때만 true
+  const inRange = (ver, range) => {
+    if (!range || range === '*') return true;
+    if (!ver) return false;
+    return String(range).trim().split(/\s+/).every((tok) => {
+      const m = tok.match(/^(>=|<=|>|<|=)?(.+)$/);
+      const c = cmpVer(ver, m[2]);
+      return { '>=': c >= 0, '<=': c <= 0, '>': c > 0, '<': c < 0, '=': c === 0, undefined: c === 0 }[m[1]];
+    });
+  };
+  let compatDoc = null; // compat.json (캐시 포함)
+  const compatCached = () => {
+    try {
+      return JSON.parse(localStorage.getItem('drb-compat') || 'null');
+    } catch {
+      return null;
+    }
+  };
+  const fetchCompat = async (force) => {
+    try {
+      const last = Number(localStorage.getItem('drb-compat-checked') || 0);
+      if (!compatDoc) compatDoc = compatCached();
+      if (!force && compatDoc && Date.now() - last < COMPAT_EVERY_MS) return;
+      localStorage.setItem('drb-compat-checked', String(Date.now()));
+      const r = await fetch(COMPAT_URL, { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d && Array.isArray(d.rules)) {
+        compatDoc = d;
+        localStorage.setItem('drb-compat', JSON.stringify(d));
+        compatState = null;
+        render();
+        ensureSidebarOpacity();
+        applyWindowOpacity();
+      }
+    } catch {}
+  };
+  // 현재 환경에 맞는 첫 규칙. 없으면 "미확인"
+  //  규칙: { platform, app(범위), web(릴리스 ID 목록), skin(범위), status: verified|limited|broken, disable:[기능], note, verified:[...] }
+  let compatState = null;
+  const compatEval = () => {
+    if (compatState) return compatState;
+    if (!compatDoc) compatDoc = compatCached();
+    const rules = (compatDoc && compatDoc.rules) || [];
+    let hit = null;
+    for (const r of rules) {
+      if (r.platform && r.platform !== ENV.platform) continue;
+      if (r.strategy && r.strategy !== ENV.strategy) continue; // 주입 방식까지 맞을 때만(앱이 설정을 되돌리면 낡은 규칙이 기능을 막지 않게)
+      if (r.app && !inRange(ENV.app, r.app)) continue;
+      if (r.skin && !inRange(VERSION, r.skin)) continue;
+      if (Array.isArray(r.web) && r.web.length && !r.web.includes(ENV.web)) continue;
+      hit = r;
+      break;
+    }
+    const webVerified = ((compatDoc && compatDoc.webVerified) || []).find((w) => w.release === ENV.web) || null;
+    compatState = {
+      // 웹 확장은 설치본 버전이 없어 "확인된 웹 릴리스 목록"으로 판단한다
+      status: hit ? hit.status || 'verified' : !compatDoc ? 'unknown' : ENV.platform === 'web' && webVerified ? 'verified' : 'untested',
+      disable: [...((hit && hit.disable) || [])],
+      note: (hit && hit.note) || '',
+      updated: (compatDoc && compatDoc.updated) || '',
+      // 이 Dooray 웹 릴리스(서버 배포)를 우리가 직접 확인했는지. 새 릴리스라도 화면 점검이 통과하면 대개 정상
+      webVerified,
+    };
+    return compatState;
+  };
+  // 기능 사용 가능 여부: 주입 방식이 허용(CAPS) + compat 에서 끄지 않음
+  const featureOn = (name) => CAPS[name] !== false && !compatEval().disable.includes(name);
+
+  // 자가 점검: Skin 기능별로 의존하는 Dooray 화면 요소. 메신저 화면이 그려진 뒤에만 의미가 있다
+  const HEALTH_CHECKS = [
+    ['main-contents', '대화 영역(#main-contents)', '대화방 배경', () => !!document.querySelector('#main-contents')],
+    ['scroll-area', '스크롤 영역(.js-scroll-area)', '대화방 배경', () => !!document.querySelector(WRAP)],
+    ['header-title', '대화방 제목(channel-header-title)', '대화방 인식, 방별 배경', () => !!document.querySelector('[data-testid="channel-header-title"]')],
+    ['channel-id', '대화방 ID(React props)', '방별 배경 저장', () => !!channel.id && !channel.id.startsWith('name:')],
+    ['sidebar-search', '사이드바 "검색" 버튼', 'Dooray Skin 버튼 위치', () => !!findBtn(ANCHOR_FIRST)],
+    ['sidebar-links', '사이드바 "링크 모아보기" 버튼', 'Dooray Skin 버튼 위치', () => !!findBtn(ANCHOR_LAST)],
+    ['sidebar-btn', 'Dooray Skin 버튼 삽입', '설정 패널 열기', () => !!document.querySelector('[data-drb-sidebar-btn]')],
+    ['stylesheets', '스타일시트 읽기', '다크 모드, 테마 색', () => { try { return [...document.styleSheets].some((sh) => sh.cssRules.length > 0); } catch { return false; } }],
+  ];
+  let health = { at: 0, ok: true, failed: [], total: HEALTH_CHECKS.length };
+  const runHealth = () => {
+    if (!/^\/messenger/.test(location.pathname)) return health; // 메신저 화면이 아니면 점검하지 않는다
+    const failed = [];
+    for (const [id, label, feature, fn] of HEALTH_CHECKS) {
+      let ok = false;
+      try {
+        ok = !!fn();
+      } catch {}
+      if (!ok) failed.push({ id, label, feature });
+    }
+    const prev = health.failed.map((f) => f.id).join();
+    health = { at: Date.now(), ok: !failed.length, failed, total: HEALTH_CHECKS.length };
+    // 호스트 로그용(변화가 있을 때만): 어느 Dooray 버전에서 무엇이 깨졌는지 launcher/hook 로그에 남는다
+    if (prev !== failed.map((f) => f.id).join() || !health.reported) {
+      health.reported = true;
+      console.debug('__DRB__:' + JSON.stringify({ health: { env: { ...ENV }, failed: failed.map((f) => f.id) } }));
+    }
+    return health;
+  };
+  const STATUS_TEXT = {
+    verified: ['정상', '확인된 Dooray 버전 조합입니다.'],
+    limited: ['일부 기능 제한', ''],
+    broken: ['동작 안 함', ''],
+    untested: ['미확인 버전', '아직 확인하지 못한 Dooray 버전입니다. 기능이 일부 안 될 수 있습니다.'],
+    unknown: ['확인 중', '호환성 정보를 아직 받지 못했습니다.'],
+  };
+  const FEATURE_NAME = { windowOpacity: '창 투명도', sidebarOpacity: '사이드바 투명도 슬라이더', darkTitleBar: '제목 표시줄 다크', toast: '다크 알림창' };
+  const renderCompat = () => {
+    const el = $('[data-ref=compat]');
+    if (!el) return;
+    const st = compatEval();
+    const h = health.at ? health : runHealth();
+    const [label, defNote] = STATUS_TEXT[st.status] || STATUS_TEXT.unknown;
+    // 웹 확장은 원래 데스크톱 전용 기능이 없으므로 "쓸 수 없는 기능" 목록에 넣지 않는다
+    const off = [...new Set([...(IS_DESKTOP ? Object.keys(CAPS).filter((k) => CAPS[k] === false) : []), ...st.disable])].map((k) => FEATURE_NAME[k] || k);
+    const where = ENV.platform === 'mac' ? 'Mac 앱' : ENV.platform === 'win' ? 'Windows 앱' : '웹';
+    const lines = [
+      `<div><b>Dooray ${where}</b> ${IS_DESKTOP ? (ENV.app ? 'v' + ENV.app : '(버전 확인 불가)') : ''} · <b>웹 릴리스</b> ${ENV.web ? String(ENV.web).slice(0, 8) : '-'}</div>`,
+      `<div><b>Skin</b> v${VERSION}${ENV.strategy && ENV.strategy !== 'extension' ? ' · 주입 방식 ' + ENV.strategy : ''}</div>`,
+      `<div class="cs ${st.status}">상태: <b>${label}</b>${st.note || defNote ? ' — ' + (st.note || defNote) : ''}</div>`,
+    ];
+    if (ENV.web && compatDoc)
+      lines.push(
+        `<div class="muted">웹 릴리스 ${st.webVerified ? `확인됨 (${st.webVerified.date || ''} · Skin v${st.webVerified.skin || '?'})` : '새로 바뀜(아직 확인 목록에 없음)'}</div>`
+      );
+    if (off.length) lines.push(`<div class="muted">이 환경에서 쓸 수 없는 기능: ${off.join(', ')}</div>`);
+    if (h.failed.length)
+      lines.push(`<div class="cs broken">화면 점검 실패 ${h.failed.length}/${h.total}: ${h.failed.map((f) => `${f.label}(${f.feature})`).join(', ')}</div>`);
+    else if (h.at) lines.push(`<div class="muted">화면 점검 ${h.total}/${h.total} 통과</div>`);
+    el.innerHTML = lines.join('');
+    // 패널 맨 위 알림: 제한/동작 안 함/점검 실패일 때만
+    const warn = $('[data-ref=compatWarn]');
+    const bad = st.status === 'limited' || st.status === 'broken' || h.failed.length;
+    if (warn) {
+      warn.hidden = !bad;
+      if (bad)
+        warn.textContent =
+          h.failed.length && st.status !== 'limited' && st.status !== 'broken'
+            ? 'Dooray 화면이 바뀌어 일부 기능이 안 될 수 있습니다. [전체] 탭 > 호환성을 확인해 주세요.'
+            : `${label}: ${st.note || (off.length ? off.join(', ') + ' 사용 불가' : '')}`;
+    }
   };
 
   // ---------------- panel ----------------
@@ -1058,6 +1237,9 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
 .msg{color:var(--accent);font-size:12px;min-height:16px;margin:6px 0 0}
 .upd{background:color-mix(in srgb,var(--accent) 12%,var(--bg));border:1px solid var(--accent);border-radius:8px;padding:8px 10px;margin:0 0 10px}
 .upd .btns{margin-top:6px}
+.upd.warn{background:color-mix(in srgb,#e5a400 14%,var(--bg));border-color:#e5a400}
+.compat{font-size:12px;line-height:1.5;margin:4px 0 6px}
+.compat .cs{margin-top:3px}.compat .cs.verified b{color:#1a9d4a}.compat .cs.limited b,.compat .cs.untested b{color:#c98a00}.compat .cs.broken{color:#d23f31}.compat .cs.broken b{color:#d23f31}
 [hidden]{display:none!important}`;
 
   const bgEditorHtml = (scope) => `
@@ -1097,11 +1279,14 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     <div data-ref="updText"></div>
     <div class="btns"><button class="primary" data-act="update">업데이트</button><button data-act="updLater">나중에</button></div>
   </div>
+  <div class="upd warn" data-ref="compatWarn" hidden></div>
   <div class="row win" data-ref="winRow">
+    <div data-ref="opacityBox">
     <label class="t">두레이 창 투명도 <span data-v="windowOpacity"></span></label>
     <input type="range" min="30" max="100" data-g="windowOpacity">
     <p class="muted" data-ref="winNote"></p>
     <label class="chk" style="margin-top:6px"><input type="checkbox" data-g="sidebarOpacity"> Dooray Skin 버튼 아래에도 표시</label>
+    </div>
     <label class="chk" data-ref="menuRow" style="margin-top:6px"><input type="checkbox" data-g="hideMenu"> 상단 메뉴 바(파일·도구·보기…) 숨기기</label>
   </div>
   <div class="tabs">
@@ -1178,7 +1363,10 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       <input type="file" accept="application/json" data-ref="importFile" hidden>
     </div>
     <p class="muted">방 키가 channelId 라서 같은 방이면 팀원끼리 JSON 공유 시 그대로 적용됩니다.</p>
-    <div class="btns"><span class="muted">현재 v${VERSION}</span><button data-act="checkUpdate">업데이트 확인</button></div>
+    <hr>
+    <label class="t">호환성 (Dooray 버전)</label>
+    <div class="compat" data-ref="compat"></div>
+    <div class="btns"><span class="muted">현재 v${VERSION}</span><button data-act="recheck">다시 점검</button><button data-act="checkUpdate">업데이트 확인</button></div>
   </section>
   <p class="msg" data-ref="msg"></p>
 </div>`;
@@ -1265,10 +1453,13 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
 
     const w = $('[data-g=windowOpacity]');
     w.value = config.global.windowOpacity;
-    $('[data-ref=winRow]').hidden = !IS_DESKTOP; // 브라우저에서는 창 투명도 자체가 불가능하므로 숨김
+    const opOn = IS_DESKTOP && featureOn('windowOpacity');
+    $('[data-ref=opacityBox]').hidden = !opOn; // 브라우저, 또는 앱이 허용하지 않는 환경(Mac 4.0.4+)에서는 창 투명도를 숨김
+    $('[data-ref=winRow]').hidden = !opOn && !(IS_DESKTOP && IS_WIN); // 남는 항목(메뉴 바 숨기기)은 Windows 앱에만
     $('[data-v=windowOpacity]').textContent = `${config.global.windowOpacity}%`;
     $('[data-ref=winNote]').textContent = '창 전체가 반투명해져 뒤 화면이 비칩니다. (최소 30%, 모든 Dooray 창 공통)';
     $('[data-ref=menuRow]').hidden = !(IS_DESKTOP && IS_WIN); // 메뉴 바는 Windows 앱에만 있음 (macOS 는 시스템 메뉴)
+    renderCompat();
     $('[data-g=hideMenu]').checked = !!config.global.hideMenu;
     $('[data-g=sidebarOpacity]').checked = config.global.sidebarOpacity !== false;
 
@@ -1362,6 +1553,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     document.body.appendChild(host);
     positionPanel();
     checkUpdate(false, UPDATE_ON_OPEN_MS); // 패널을 열 때 2분 넘게 지났으면 다시 확인
+    runHealth();
 
     sr.addEventListener('click', async (e) => {
       const t = e.target;
@@ -1428,6 +1620,13 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       if (act === 'themeReset') {
         patchTheme({ color: detectThemeBase(), enabled: false });
         flash('기본 파란색으로 되돌렸습니다.');
+      }
+      if (act === 'recheck') {
+        compatState = null;
+        runHealth();
+        await fetchCompat(true);
+        render();
+        return flash('다시 점검했습니다.');
       }
       if (act === 'pick') box.querySelector('[data-k=file]').click();
       if (act === 'url') {
@@ -2038,6 +2237,10 @@ button:disabled{opacity:.6;cursor:default}
     get update() { return update; },
     showChannel,
     effectiveOpacity,
+    get env() { return { ...ENV }; },
+    get health() { return runHealth(); },
+    get compat() { return { ...compatEval(), doc: compatDoc }; },
+    featureOn,
     get toastHook() { return toastHookState; },
     lock: () => lockNow(),
     sysIdle,
@@ -2055,5 +2258,11 @@ button:disabled{opacity:.6;cursor:default}
     applyAll();
     checkUpdate();
     setInterval(() => checkUpdate(), UPDATE_EVERY_MS);
+    fetchCompat();
+    setInterval(() => fetchCompat(), COMPAT_EVERY_MS);
+    // 화면이 다 그려진 뒤(사이드바 등) 한 번, 이후 5분마다 점검. 호스트 로그에 환경 정보도 남긴다
+    console.debug('__DRB__:' + JSON.stringify({ env: { ...ENV } }));
+    setTimeout(() => { runHealth(); render(); }, 8000);
+    setInterval(runHealth, 5 * 60 * 1000);
   });
 })();
