@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.8.2';
+  const VERSION = '0.8.3';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -122,6 +122,7 @@
       dark: { enabled: false, level: DARK_LEVEL_DEFAULT, titleBar: true, toast: true },
       hideMenu: false, // Windows 데스크톱: 상단 메뉴 바(파일·도구·보기…) 숨기기
       sidebarOpacity: true, // 데스크톱: 사이드바 Dooray Skin 버튼 아래 창 투명도 슬라이더
+      readGuard: false, // 창을 옮길 때 읽음 방지 (대화창을 직접 누를 때만 읽음)
       lock: freshLock(), // 화면 잠금 (hash 가 있으면 사용 중)
     },
     rooms: {},
@@ -164,6 +165,7 @@
         },
         hideMenu: !!c.global?.hideMenu,
         sidebarOpacity: c.global?.sidebarOpacity !== false,
+        readGuard: !!c.global?.readGuard,
         lock: normLock(c.global?.lock),
       },
       rooms: { ...rooms },
@@ -1156,21 +1158,24 @@ ${WRAP} > .js-scroll-area{position:relative;z-index:1;}`;
     const st = compatEval();
     const h = health.at ? health : runHealth();
     const [label, defNote] = STATUS_TEXT[st.status] || STATUS_TEXT.unknown;
+    // compat.json(원격 GitHub Pages)에서 온 값(status·note·disable·webVerified)과 환경 값은
+    // innerHTML 에 들어가므로 반드시 이스케이프한다(원격 JSON 으로 인한 HTML/스크립트 주입 방지)
+    const e = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     // 웹 확장은 원래 데스크톱 전용 기능이 없으므로 "쓸 수 없는 기능" 목록에 넣지 않는다
     const off = [...new Set([...(IS_DESKTOP ? Object.keys(CAPS).filter((k) => CAPS[k] === false) : []), ...st.disable])].map((k) => FEATURE_NAME[k] || k);
     const where = ENV.platform === 'mac' ? 'Mac 앱' : ENV.platform === 'win' ? 'Windows 앱' : '웹';
     const lines = [
-      `<div><b>Dooray ${where}</b> ${IS_DESKTOP ? (ENV.app ? 'v' + ENV.app : '(버전 확인 불가)') : ''} · <b>웹 릴리스</b> ${ENV.web ? String(ENV.web).slice(0, 8) : '-'}</div>`,
-      `<div><b>Skin</b> v${VERSION}${ENV.strategy && ENV.strategy !== 'extension' ? ' · 주입 방식 ' + ENV.strategy : ''}</div>`,
-      `<div class="cs ${st.status}">상태: <b>${label}</b>${st.note || defNote ? ' — ' + (st.note || defNote) : ''}</div>`,
+      `<div><b>Dooray ${where}</b> ${IS_DESKTOP ? (ENV.app ? 'v' + e(ENV.app) : '(버전 확인 불가)') : ''} · <b>웹 릴리스</b> ${ENV.web ? e(String(ENV.web).slice(0, 8)) : '-'}</div>`,
+      `<div><b>Skin</b> v${e(VERSION)}${ENV.strategy && ENV.strategy !== 'extension' ? ' · 주입 방식 ' + e(ENV.strategy) : ''}</div>`,
+      `<div class="cs ${e(st.status)}">상태: <b>${e(label)}</b>${st.note || defNote ? ' — ' + e(st.note || defNote) : ''}</div>`,
     ];
     if (ENV.web && compatDoc)
       lines.push(
-        `<div class="muted">웹 릴리스 ${st.webVerified ? `확인됨 (${st.webVerified.date || ''} · Skin v${st.webVerified.skin || '?'})` : '새로 바뀜(아직 확인 목록에 없음)'}</div>`
+        `<div class="muted">웹 릴리스 ${st.webVerified ? `확인됨 (${e(st.webVerified.date || '')} · Skin v${e(st.webVerified.skin || '?')})` : '새로 바뀜(아직 확인 목록에 없음)'}</div>`
       );
-    if (off.length) lines.push(`<div class="muted">이 환경에서 쓸 수 없는 기능: ${off.join(', ')}</div>`);
+    if (off.length) lines.push(`<div class="muted">이 환경에서 쓸 수 없는 기능: ${off.map(e).join(', ')}</div>`);
     if (h.failed.length)
-      lines.push(`<div class="cs broken">화면 점검 실패 ${h.failed.length}/${h.total}: ${h.failed.map((f) => `${f.label}(${f.feature})`).join(', ')}</div>`);
+      lines.push(`<div class="cs broken">화면 점검 실패 ${h.failed.length}/${h.total}: ${h.failed.map((f) => `${e(f.label)}(${e(f.feature)})`).join(', ')}</div>`);
     else if (h.at) lines.push(`<div class="muted">화면 점검 ${h.total}/${h.total} 통과</div>`);
     el.innerHTML = lines.join('');
     // 패널 맨 위 알림: 제한/동작 안 함/점검 실패일 때만
@@ -1294,6 +1299,10 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
       <div class="btns"><button data-act="hostOn">복사본으로 창 투명도 켜기</button></div>
     </div>
     <label class="chk" data-ref="menuRow" style="margin-top:6px"><input type="checkbox" data-g="hideMenu"> 상단 메뉴 바(파일·도구·보기…) 숨기기</label>
+  </div>
+  <div class="row win">
+    <label class="chk"><input type="checkbox" data-g="readGuard"> 창을 옮길 때 읽음 방지</label>
+    <p class="muted">창을 이동·정렬만 할 땐 안 읽은 채로 두고, 대화창을 직접 클릭·스크롤·입력할 때만 읽음 처리합니다.</p>
   </div>
   <div class="tabs">
     <button data-tab="room">이 방</button>
@@ -1471,6 +1480,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
     renderCompat();
     $('[data-g=hideMenu]').checked = !!config.global.hideMenu;
     $('[data-g=sidebarOpacity]').checked = config.global.sidebarOpacity !== false;
+    $('[data-g=readGuard]').checked = !!config.global.readGuard;
 
     const dk = config.global.dark;
     $('[data-d=enabled]').checked = !!dk.enabled;
@@ -1705,6 +1715,11 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
         save();
         render();
         flash(t.checked ? '감시자가 1~2초 안에 메뉴 바를 숨깁니다.' : '메뉴 바를 다시 표시합니다.');
+      } else if (t.dataset.g === 'readGuard') {
+        config.global.readGuard = t.checked;
+        save();
+        render();
+        flash(t.checked ? '창을 옮길 땐 읽음을 보류합니다. 대화창을 누르면 읽힘.' : '읽음 방지를 껐습니다.');
       }
       else if (t.dataset.l === 'onStart') patchLock({ onStart: t.checked });
       else if (t.dataset.l === 'idleMin') patchLock({ idleMin: Number(t.value) });
@@ -2127,6 +2142,62 @@ button:disabled{opacity:.6;cursor:default}
     hostIdle = { ms: s * 1000, at: Date.now() };
     checkIdle();
   };
+  // ---------------- 읽음 방지 (창 이동 시) ----------------
+  // 창을 옮기기만 해도 Dooray 가 "읽음"(PUT .../member/seq {readSeq})을 보내 안 읽은 메시지가 읽힌다.
+  // readGuard 가 켜지면 그 요청을, 실제로 대화창을 만진 직후(READ_GRACE 안)에만 보내고 창만 옮길 땐 보류한다.
+  // 보류분은 다음 실제 상호작용(대화창 클릭·스크롤·입력) 때 보낸다 → "대화창을 눌러야 읽음" 이 된다.
+  // XHR.prototype.send 를 감싸므로 주입이 늦어도(core 가 document_idle) 동작한다. fetch 는 예비.
+  const SEQ_RE = /\/messenger\/v1\/api\/channel\/\d+\/member\/seq(\b|$)/;
+  const READ_GRACE = 1500; // ms: 이 시간 내 실제 상호작용이 있었으면 읽음 허용
+  let lastReadInteract = 0;
+  let pendingRead = null;
+  const inOwnUi = (e) => {
+    const p = e.composedPath ? e.composedPath() : [];
+    return p.some((n) => n && (n.id === 'drb-panel-host' || n.id === 'drb-lock-host'));
+  };
+  const onReadInteract = (e) => {
+    if (!e.isTrusted || inOwnUi(e)) return; // 우리 패널/잠금 UI 클릭은 "대화 읽음" 이 아니다
+    lastReadInteract = Date.now();
+    if (pendingRead) {
+      const f = pendingRead;
+      pendingRead = null;
+      try { f(); } catch {}
+    }
+  };
+  for (const t of ['pointerdown', 'keydown', 'wheel', 'scroll']) window.addEventListener(t, onReadInteract, { capture: true, passive: true });
+  const isSeqPut = (m, u) => !!config.global.readGuard && m && String(m).toUpperCase() === 'PUT' && SEQ_RE.test(u || '');
+  const readRecent = () => Date.now() - lastReadInteract <= READ_GRACE;
+  (() => {
+    const oo = XMLHttpRequest.prototype.open;
+    const os = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, u) {
+      this.__drbM = m;
+      this.__drbU = u;
+      return oo.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function (body) {
+      if (isSeqPut(this.__drbM, this.__drbU) && !readRecent()) {
+        pendingRead = () => { try { os.call(this, body); } catch {} }; // 막고 보류
+        return;
+      }
+      return os.apply(this, arguments);
+    };
+    const of = window.fetch;
+    window.fetch = function (input, init) {
+      const u = typeof input === 'string' ? input : (input && input.url) || '';
+      const m = (init && init.method) || (input && input.method) || 'GET';
+      if (isSeqPut(m, u) && !readRecent()) {
+        return new Promise((res) => {
+          let done = false;
+          pendingRead = () => { done = true; res(of.call(window, input, init)); };
+          // 8초 안에 상호작용이 없으면 앱이 멈추지 않게 가짜 성공 응답(실제 읽음은 보내지 않음)
+          setTimeout(() => { if (!done) { try { res(new Response('{}', { status: 200 })); } catch {} } }, 8000);
+        });
+      }
+      return of.apply(this, arguments);
+    };
+  })();
+
   const onActivity = () => {
     if (locked) return;
     const now = Date.now();
