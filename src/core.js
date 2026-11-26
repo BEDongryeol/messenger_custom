@@ -10,7 +10,7 @@
   if (window.__drbCore) return;
   window.__drbCore = true;
 
-  const VERSION = '0.8.3';
+  const VERSION = '0.8.4';
   // 런처가 넣는 표식 + Electron 앱 자체 판별(이중 안전장치)
   const IS_DESKTOP =
     window.__DRB_HOST === 'desktop' || /Electron\//.test(navigator.userAgent) || !!window.macBridge || !!window.winBridge;
@@ -1302,7 +1302,7 @@ hr{border:none;border-top:1px solid var(--bd2);margin:12px 0}
   </div>
   <div class="row win">
     <label class="chk"><input type="checkbox" data-g="readGuard"> 창을 옮길 때 읽음 방지</label>
-    <p class="muted">창을 이동·정렬만 할 땐 안 읽은 채로 두고, 대화창을 직접 클릭·스크롤·입력할 때만 읽음 처리합니다.</p>
+    <p class="muted">창을 이동·정렬하거나 스크롤로 훑어볼 땐 안 읽은 채로 두고, 대화창을 직접 클릭하거나 입력할 때만 읽음 처리합니다.</p>
   </div>
   <div class="tabs">
     <button data-tab="room">이 방</button>
@@ -2145,7 +2145,8 @@ button:disabled{opacity:.6;cursor:default}
   // ---------------- 읽음 방지 (창 이동 시) ----------------
   // 창을 옮기기만 해도 Dooray 가 "읽음"(PUT .../member/seq {readSeq})을 보내 안 읽은 메시지가 읽힌다.
   // readGuard 가 켜지면 그 요청을, 실제로 대화창을 만진 직후(READ_GRACE 안)에만 보내고 창만 옮길 땐 보류한다.
-  // 보류분은 다음 실제 상호작용(대화창 클릭·스크롤·입력) 때 보낸다 → "대화창을 눌러야 읽음" 이 된다.
+  // 보류분은 다음 실제 상호작용(대화창 클릭·입력) 때 보낸다 → "대화창을 눌러야 읽음" 이 된다.
+  // 스크롤·휠은 상호작용으로 치지 않는다(스크롤로 훑어볼 땐 안 읽히도록). 클릭/입력만 읽음으로 본다.
   // XHR.prototype.send 를 감싸므로 주입이 늦어도(core 가 document_idle) 동작한다. fetch 는 예비.
   const SEQ_RE = /\/messenger\/v1\/api\/channel\/\d+\/member\/seq(\b|$)/;
   const READ_GRACE = 1500; // ms: 이 시간 내 실제 상호작용이 있었으면 읽음 허용
@@ -2164,7 +2165,7 @@ button:disabled{opacity:.6;cursor:default}
       try { f(); } catch {}
     }
   };
-  for (const t of ['pointerdown', 'keydown', 'wheel', 'scroll']) window.addEventListener(t, onReadInteract, { capture: true, passive: true });
+  for (const t of ['pointerdown', 'keydown']) window.addEventListener(t, onReadInteract, { capture: true, passive: true });
   const isSeqPut = (m, u) => !!config.global.readGuard && m && String(m).toUpperCase() === 'PUT' && SEQ_RE.test(u || '');
   const readRecent = () => Date.now() - lastReadInteract <= READ_GRACE;
   (() => {
